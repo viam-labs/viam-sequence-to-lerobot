@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "viam-sequence-to-lerobot"
+version = "0.1.0"
+description = "Convert Viam sequence dataset exports to the LeRobot v3 dataset format for VLA fine-tuning"
+requires-python = ">=3.10"
+dependencies = [
+    "lerobot>=0.4",
+    "pillow>=10",
+    "pyarrow>=14",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+viam-seq-to-lerobot = "viam_sequence_to_lerobot.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
