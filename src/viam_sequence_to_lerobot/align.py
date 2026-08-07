@@ -31,6 +31,14 @@ def nearest(sorted_timestamps: Sequence[float], target: float) -> int:
     return i if (after - target) < (target - before) else i - 1
 
 
+def median_spacing(sorted_timestamps: Sequence[float]) -> float | None:
+    """Median spacing between consecutive timestamps, or None if fewer than 2."""
+    if len(sorted_timestamps) < 2:
+        return None
+    deltas = sorted(b - a for a, b in zip(sorted_timestamps, sorted_timestamps[1:]))
+    return deltas[len(deltas) // 2]
+
+
 def match_stream(
     ticks: Sequence[float],
     stream: Sequence[tuple[float, T]],

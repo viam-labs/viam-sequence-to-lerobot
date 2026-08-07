@@ -4,9 +4,11 @@ import numpy as np
 import pytest
 import torch
 
+from viam_sequence_to_lerobot.align import median_spacing
 from viam_sequence_to_lerobot.convert import (
     ConversionConfig,
     EpisodeSkip,
+    _warn_rate_mismatches,
     build_episode,
     convert,
 )
@@ -122,3 +124,37 @@ def test_convert_fails_without_episodes(synthetic_export, tmp_path):
 def test_config_requires_a_camera(synthetic_export, tmp_path):
     with pytest.raises(ValueError, match="camera"):
         make_config(synthetic_export, tmp_path, camera_components=())
+
+
+def test_median_spacing():
+    assert median_spacing([]) is None
+    assert median_spacing([1.0]) is None
+    assert median_spacing([0.0, 0.1, 0.2, 0.3]) == pytest.approx(0.1)
+    # Robust to one outlier gap (a dropped frame).
+    assert median_spacing([0.0, 0.1, 0.2, 0.7, 0.8]) == pytest.approx(0.1)
+
+
+def test_rate_check_warns_on_fps_mismatch(synthetic_export, tmp_path, caplog):
+    config = make_config(synthetic_export, tmp_path, fps=30)
+    ticks = [i * 0.1 for i in range(20)]  # 10 Hz clock, --fps 30
+    with caplog.at_level("WARNING"):
+        _warn_rate_mismatches("seq", ticks, {}, config)
+    assert "but --fps is 30" in caplog.text
+
+
+def test_rate_check_warns_on_slow_stream(synthetic_export, tmp_path, caplog):
+    config = make_config(synthetic_export, tmp_path)
+    ticks = [i * 0.1 for i in range(20)]  # 10 Hz clock, matching --fps
+    joints = [(i * 0.2, object()) for i in range(10)]  # 5 Hz joints
+    with caplog.at_level("WARNING"):
+        _warn_rate_mismatches("seq", ticks, {"joints": joints}, config)
+    assert "'joints'" in caplog.text
+    assert "duplicate or drop" in caplog.text
+
+
+def test_rate_check_silent_when_rates_match(synthetic_export, tmp_path, caplog):
+    export = load_export(synthetic_export)
+    config = make_config(synthetic_export, tmp_path)
+    with caplog.at_level("WARNING"):
+        build_episode(export, export.sequences[0], config)
+    assert "Hz" not in caplog.text

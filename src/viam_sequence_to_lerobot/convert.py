@@ -22,7 +22,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from .align import align_streams
+from .align import align_streams, median_spacing
 from .export_reader import Sequence, SequenceExport, load_export
 
 logger = logging.getLogger(__name__)
@@ -83,6 +83,54 @@ class ConversionSummary:
         self.skipped.append((sequence_id, reason))
 
 
+# Fraction by which a stream's measured rate may differ from its reference
+# (the clock camera vs --fps, other streams vs the clock) before warning.
+RATE_MISMATCH_FRACTION = 0.2
+
+
+def _warn_rate_mismatches(
+    sequence_id: str,
+    ticks: list[float],
+    streams: dict[str, list],
+    config: ConversionConfig,
+) -> None:
+    """Warn when measured capture rates disagree with --fps or each other.
+
+    A clock camera slower/faster than --fps mistimes the dataset timeline and
+    the next-state action horizon; a joint or camera stream slower than the
+    clock gets duplicated across frames by nearest-timestamp matching (a
+    zero-order hold), which for joints turns many actions into "don't move".
+    """
+    clock_dt = median_spacing(ticks)
+    if clock_dt is None or clock_dt <= 0:
+        return
+    expected_dt = 1.0 / config.fps
+    if abs(clock_dt - expected_dt) > RATE_MISMATCH_FRACTION * expected_dt:
+        logger.warning(
+            "Sequence %s: clock camera %r captured at ~%.1f Hz but --fps is %d; "
+            "video timing and the next-state action horizon will be wrong "
+            "unless --fps matches the capture rate",
+            sequence_id,
+            config.clock_camera,
+            1.0 / clock_dt,
+            config.fps,
+        )
+    for name, stream in streams.items():
+        dt = median_spacing([ts for ts, _ in stream])
+        if dt is None or dt <= 0:
+            continue
+        if abs(dt - clock_dt) > RATE_MISMATCH_FRACTION * clock_dt:
+            logger.warning(
+                "Sequence %s: stream %r captured at ~%.1f Hz vs clock camera at "
+                "~%.1f Hz; nearest-timestamp matching will duplicate or drop "
+                "readings",
+                sequence_id,
+                name,
+                1.0 / dt,
+                1.0 / clock_dt,
+            )
+
+
 def joint_values(payload: dict) -> list[float]:
     """Extract joint values from an arm JointPositions payload."""
     return [float(v) for v in payload["positions"]["values"]]
@@ -120,6 +168,7 @@ def build_episode(
     for name in config.camera_components[1:]:
         streams[name] = [(r.timestamp, r) for r in camera_rows[name]]
 
+    _warn_rate_mismatches(sequence.sequence_id, ticks, streams, config)
     kept, aligned = align_streams(ticks, streams, config.tolerance_s)
     n_dropped = len(ticks) - len(kept)
     if n_dropped:
