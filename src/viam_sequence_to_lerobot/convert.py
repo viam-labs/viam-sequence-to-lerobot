@@ -100,6 +100,8 @@ def _warn_rate_mismatches(
     the next-state action horizon; a joint or camera stream slower than the
     clock gets duplicated across frames by nearest-timestamp matching (a
     zero-order hold), which for joints turns many actions into "don't move".
+    Streams faster than the clock are fine — subsampling to the frame clock
+    is standard — so only the slow direction warns.
     """
     clock_dt = median_spacing(ticks)
     if clock_dt is None or clock_dt <= 0:
@@ -119,11 +121,11 @@ def _warn_rate_mismatches(
         dt = median_spacing([ts for ts, _ in stream])
         if dt is None or dt <= 0:
             continue
-        if abs(dt - clock_dt) > RATE_MISMATCH_FRACTION * clock_dt:
+        if dt - clock_dt > RATE_MISMATCH_FRACTION * clock_dt:
             logger.warning(
-                "Sequence %s: stream %r captured at ~%.1f Hz vs clock camera at "
-                "~%.1f Hz; nearest-timestamp matching will duplicate or drop "
-                "readings",
+                "Sequence %s: stream %r captured at ~%.1f Hz, slower than the "
+                "clock camera at ~%.1f Hz; nearest-timestamp matching will "
+                "reuse stale readings across frames or drop ticks",
                 sequence_id,
                 name,
                 1.0 / dt,

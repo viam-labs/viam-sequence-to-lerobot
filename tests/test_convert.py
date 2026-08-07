@@ -149,7 +149,16 @@ def test_rate_check_warns_on_slow_stream(synthetic_export, tmp_path, caplog):
     with caplog.at_level("WARNING"):
         _warn_rate_mismatches("seq", ticks, {"joints": joints}, config)
     assert "'joints'" in caplog.text
-    assert "duplicate or drop" in caplog.text
+    assert "stale readings" in caplog.text
+
+
+def test_rate_check_silent_on_fast_stream(synthetic_export, tmp_path, caplog):
+    config = make_config(synthetic_export, tmp_path)
+    ticks = [i * 0.1 for i in range(20)]  # 10 Hz clock
+    joints = [(i * 0.02, object()) for i in range(100)]  # 50 Hz joints: benign
+    with caplog.at_level("WARNING"):
+        _warn_rate_mismatches("seq", ticks, {"joints": joints}, config)
+    assert caplog.text == ""
 
 
 def test_rate_check_silent_when_rates_match(synthetic_export, tmp_path, caplog):
