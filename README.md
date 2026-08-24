@@ -48,20 +48,56 @@ Semantics (run `--help` for all flags):
 ```sh
 lerobot-train \
     --policy.path=lerobot/smolvla_base \
+    --policy.input_features=null \
     --policy.push_to_hub=false \
     --dataset.repo_id=viam/open-box \
-    --dataset.root=~/datasets/open-box-lerobot \
-    --rename_map='{"observation.images.webcam_teleop": "observation.images.camera1",
-                   "observation.images.realsense_cam_teleop": "observation.images.camera2"}'
+    --dataset.root=~/datasets/open-box-lerobot
 ```
 
-- `smolvla_base` expects camera keys `camera1/2/3` — map yours with
-  `--rename_map`; unused slots are fine.
+- **`--policy.input_features=null` matters if you have fewer than three
+  cameras.** Without it, the checkpoint declares whatever `smolvla_base`
+  declares — `camera1/2/3` — no matter how many cameras your dataset has, so a
+  2-camera dataset produces a checkpoint claiming three. `null` tells lerobot to
+  derive the features from your dataset instead, and your camera keys keep their
+  real names (`observation.images.webcam_teleop`), which read better than
+  `camera1` anyway. Details in [Camera keys](#camera-keys) below.
 - Train on a CUDA GPU for real runs; at rollout, lower `n_action_steps`
   (e.g. 5–10) so the policy replans frequently.
 - The inference client must mirror the dataset contract: build the state from
   `JointPositions` (degrees) exactly as captured, and send the policy's output
   to `MoveToJointPositions` (degrees).
+
+### Camera keys
+
+`smolvla_base` declares three image features (`observation.images.camera1/2/3`),
+and the older advice here was to map yours onto them with `--rename_map` and
+leave unused slots alone. That works for training, but it bakes a wrong
+declaration into the checkpoint you ship, for two reasons:
+
+- `lerobot/configs/train.py:285` refuses a `--rename_map` unless a pretrained
+  checkpoint is given, so the base's `input_features` passes through verbatim —
+  including camera slots your dataset never filled.
+- `lerobot/policies/factory.py:395` **skips** the camera-consistency check
+  entirely when a `rename_map` is set, so nothing warns you about the mismatch.
+
+Training itself is unharmed — `modeling_smolvla.py:340-346` builds each batch
+from whatever keys are present and drops the rest — but anything reading
+`config.json` afterwards will try to supply a camera that does not exist, and
+there is no safe filler: black, mid-gray, and a duplicate of another camera each
+shift the predicted action chunk by several degrees versus omitting the key.
+
+`--policy.input_features=null` avoids all of it. `input_features` is documented
+as accepting `None` "in order to infer those values from the dataset"
+(`lerobot/configs/policies.py:58`), and dropping `--rename_map` re-enables the
+consistency check. Weights are unaffected either way: SmolVLA runs every camera
+through one shared vision tower, so the slot names are labels with no parameters
+behind them.
+
+Use `--rename_map` only when you deliberately want the base model's key names —
+for example to stay drop-in compatible with an existing inference client. If you
+already have a checkpoint declaring an unused camera, either delete the key from
+its `config.json` (weight-compatible, byte-identical output) or tell the
+inference side to ignore it.
 
 ## Development
 
