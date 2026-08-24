@@ -93,6 +93,18 @@ consistency check. Weights are unaffected either way: SmolVLA runs every camera
 through one shared vision tower, so the slot names are labels with no parameters
 behind them.
 
+Note that `null` must be spelled exactly that — `--policy.input_features='{}'`
+does **not** work, because draccus merges an empty dict into the pretrained
+config's rather than replacing it, leaving all three inherited features in place.
+
+One knock-on effect worth knowing: the derived features carry your cameras'
+**native** resolutions, not the base model's `[3, 256, 256]`. For a 1080p feed
+that means `config.json` declares `[3, 1920, 1080]`, and an inference client
+sizing its payloads from `input_features` will send full-resolution frames. That
+is closer to what training actually saw — SmolVLA letterboxes to 512x512
+internally either way — but keep the transport on JPEG; a raw 1080p frame
+base64-encodes to roughly 8 MB and will hit gRPC message limits.
+
 Use `--rename_map` only when you deliberately want the base model's key names —
 for example to stay drop-in compatible with an existing inference client. If you
 already have a checkpoint declaring an unused camera, either delete the key from
