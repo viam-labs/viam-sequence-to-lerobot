@@ -19,10 +19,13 @@ example:
       --output-root ~/datasets/open-box-lerobot
 
 Each Viam sequence becomes one episode. The camera stream provides the frame
-clock; arm joint readings are matched to each frame by nearest timestamp.
-observation.state is the joint angles at each frame and action is the joint
-angles at the next frame. Camera frames are encoded as MP4 video. The result
-loads with LeRobotDataset and trains with lerobot-train as-is.
+clock; arm readings are matched to each frame by nearest timestamp. With
+--action-space joints (default), observation.state is the joint angles at each
+frame and action is the joint angles at the next frame. With --action-space
+delta-ee, observation.state is the absolute end-effector pose [x,y,z,rx,ry,rz]
+(mm, axis-angle radians) from EndPosition readings and action is the body-frame
+delta to the next frame's pose. Camera frames are encoded as MP4 video. The
+result loads with LeRobotDataset and trains with lerobot-train as-is.
 """
 
 
@@ -80,8 +83,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--arm",
         metavar="COMPONENT",
         default="xarm",
-        help="name of the Viam arm component whose JointPositions readings "
-        "become observation.state and action (default: %(default)s)",
+        help="name of the Viam arm component whose readings become "
+        "observation.state and action (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--action-space",
+        choices=("joints", "delta-ee"),
+        default="joints",
+        help="joints: state/action are JointPositions angles (action = next "
+        "frame's joints). delta-ee: state is the absolute EndPosition pose "
+        "[x,y,z,rx,ry,rz] and action is the delta to the next frame's pose; "
+        "at inference, compose the delta onto the live EndPosition and call "
+        "MoveToPosition (default: %(default)s)",
     )
     parser.add_argument(
         "--fps",
@@ -136,6 +149,7 @@ def main(argv: list[str] | None = None) -> int:
         task=args.task,
         camera_components=tuple(args.cameras) if args.cameras else ("webcam-teleop",),
         arm_component=args.arm,
+        action_space=args.action_space,
         fps=args.fps,
         tolerance_s=args.tolerance_s,
         min_frames=args.min_frames,

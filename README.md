@@ -7,8 +7,9 @@ VLA policy (SmolVLA, pi0, ACT, ...).
 ## Before: capture and export from Viam
 
 1. **Capture** on your machine: each camera via `GetImages` and the arm via
-   `JointPositions`, all at the same rate (e.g. 10 Hz). One recorded
-   demonstration = one sequence.
+   `JointPositions` (plus `EndPosition` if you want `--action-space delta-ee`),
+   all at the same rate (e.g. 10 Hz). One recorded demonstration = one
+   sequence.
 2. **Create sequences** over each demonstration's time range (part, resources,
    start/end) and add them to a **sequence dataset**.
 3. **Export** it:
@@ -36,8 +37,16 @@ Semantics (run `--help` for all flags):
 - Each sequence becomes one episode; the **first** `--camera` defines the
   frame clock, and joint readings / other cameras are matched to it by nearest
   timestamp (`--tolerance-s`, default 50 ms).
-- `observation.state` = joint angles; `action` = joint angles at the next
-  frame (next-state-as-action). Viam-native units are kept (degrees).
+- `--action-space joints` (default): `observation.state` = joint angles;
+  `action` = joint angles at the next frame (next-state-as-action).
+  Viam-native units are kept (degrees).
+- `--action-space delta-ee`: `observation.state` = the absolute end-effector
+  pose `[x, y, z, rx, ry, rz]` from the arm's `EndPosition` readings —
+  millimeters as captured, orientation as an axis-angle rotation vector in
+  radians (converted from Viam's orientation vector). `action` = the
+  body-frame delta from each frame's pose to the next: xyz difference plus
+  the relative rotation `R_t⁻¹·R_{t+1}` as a rotation vector. Sequences with
+  no `EndPosition` readings are skipped.
 - Sequences missing a listed camera and episodes shorter than `--min-frames`
   are skipped, with reasons logged.
 - Frames are encoded as MP4 video; the output loads with `LeRobotDataset`
@@ -63,9 +72,14 @@ lerobot-train \
   `camera1` anyway. Details in [Camera keys](#camera-keys) below.
 - Train on a CUDA GPU for real runs; at rollout, lower `n_action_steps`
   (e.g. 5–10) so the policy replans frequently.
-- The inference client must mirror the dataset contract: build the state from
-  `JointPositions` (degrees) exactly as captured, and send the policy's output
-  to `MoveToJointPositions` (degrees).
+- The inference client must mirror the dataset contract. For `joints`
+  datasets: build the state from `JointPositions` (degrees) exactly as
+  captured, and send the policy's output to `MoveToJointPositions` (degrees).
+  For `delta-ee` datasets: build the state from `EndPosition` as
+  `[x, y, z, rx, ry, rz]` (mm, axis-angle radians — same conversion as
+  `viam_sequence_to_lerobot.pose.pose_vector`), compose each predicted delta
+  onto the live pose with `pose_compose` (translation adds; rotation
+  right-multiplies), and send the result to `MoveToPosition`.
 
 ### Camera keys
 

@@ -3,8 +3,12 @@
 Mapping (Viam capture -> LeRobot feature):
 - camera ``GetImages`` frames        -> ``observation.images.<camera>``, one
   feature per configured camera; the first camera defines the frame clock
-- arm ``JointPositions`` (N joints)  -> ``observation.state``
-- ``JointPositions`` at the next tick -> ``action`` (next-state-as-action)
+- ``action_space="joints"`` (default):
+  arm ``JointPositions`` (N joints)  -> ``observation.state``;
+  ``JointPositions`` at the next tick -> ``action`` (next-state-as-action)
+- ``action_space="delta-ee"``:
+  arm ``EndPosition`` as ``[x, y, z, rx, ry, rz]`` -> ``observation.state``;
+  body-frame delta to the next tick's pose -> ``action``
 
 Joint readings and the frames of every non-clock camera are matched to each
 clock tick by nearest timestamp within ``tolerance_s``; ticks that cannot be
@@ -24,6 +28,7 @@ from PIL import Image
 
 from .align import align_streams, median_spacing
 from .export_reader import Sequence, SequenceExport, load_export
+from .pose import POSE_NAMES, pose_delta, pose_vector
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +45,7 @@ class ConversionConfig:
     task: str
     camera_components: tuple[str, ...] = ("webcam-teleop",)
     arm_component: str = "xarm"
+    action_space: str = "joints"
     fps: int = 10
     tolerance_s: float = 0.05
     min_frames: int = 10
@@ -47,6 +53,10 @@ class ConversionConfig:
     def __post_init__(self) -> None:
         if not self.camera_components:
             raise ValueError("At least one camera component is required")
+        if self.action_space not in ("joints", "delta-ee"):
+            raise ValueError(
+                f"action_space must be 'joints' or 'delta-ee', got {self.action_space!r}"
+            )
 
     @property
     def clock_camera(self) -> str:
@@ -158,14 +168,17 @@ def build_episode(
     for name, rows in camera_rows.items():
         if not rows:
             raise EpisodeSkip(f"no frames from camera {name!r}")
-    joint_rows = export.tabular_rows(sequence.sequence_id, config.arm_component, "JointPositions")
-    if not joint_rows:
-        raise EpisodeSkip(f"no JointPositions readings from arm {config.arm_component!r}")
+    delta_ee = config.action_space == "delta-ee"
+    arm_method = "EndPosition" if delta_ee else "JointPositions"
+    arm_key = "ee" if delta_ee else "joints"
+    arm_rows = export.tabular_rows(sequence.sequence_id, config.arm_component, arm_method)
+    if not arm_rows:
+        raise EpisodeSkip(f"no {arm_method} readings from arm {config.arm_component!r}")
 
     clock_rows = camera_rows[config.clock_camera]
     ticks = [r.timestamp for r in clock_rows]
     streams: dict[str, list] = {
-        "joints": [(r.timestamp, r) for r in joint_rows],
+        arm_key: [(r.timestamp, r) for r in arm_rows],
     }
     for name in config.camera_components[1:]:
         streams[name] = [(r.timestamp, r) for r in camera_rows[name]]
@@ -184,13 +197,21 @@ def build_episode(
     if len(kept) < 2:
         raise EpisodeSkip("fewer than 2 fully aligned frames")
 
-    joints = np.array([joint_values(r.payload) for r in aligned["joints"]], dtype=np.float32)
-    actions = joints[1:]  # command for tick t is the measured joints at tick t+1
+    if delta_ee:
+        poses = np.stack([pose_vector(r.payload) for r in aligned["ee"]])
+        states = poses[:-1].astype(np.float32)
+        actions = np.stack(
+            [pose_delta(poses[i], poses[i + 1]) for i in range(len(poses) - 1)]
+        ).astype(np.float32)
+    else:
+        joints = np.array([joint_values(r.payload) for r in aligned["joints"]], dtype=np.float32)
+        states = joints[:-1]
+        actions = joints[1:]  # command for tick t is the measured joints at tick t+1
     images = {config.clock_camera: [clock_rows[i].path for i in kept[:-1]]}
     for name in config.camera_components[1:]:
         images[name] = [r.path for r in aligned[name][:-1]]
     return EpisodeFrames(
-        sequence=sequence, images=images, states=joints[:-1], actions=actions
+        sequence=sequence, images=images, states=states, actions=actions
     )
 
 
@@ -200,18 +221,18 @@ def _load_image(path: Path) -> np.ndarray:
 
 
 def _build_features(
-    n_joints: int, image_shapes: dict[str, tuple[int, int, int]]
+    state_names: list[str], image_shapes: dict[str, tuple[int, int, int]]
 ) -> dict:
     features = {
         "observation.state": {
             "dtype": "float32",
-            "shape": (n_joints,),
-            "names": joint_names(n_joints),
+            "shape": (len(state_names),),
+            "names": state_names,
         },
         "action": {
             "dtype": "float32",
-            "shape": (n_joints,),
-            "names": joint_names(n_joints),
+            "shape": (len(state_names),),
+            "names": state_names,
         },
     }
     for camera, shape in image_shapes.items():
@@ -232,7 +253,7 @@ def convert(config: ConversionConfig) -> ConversionSummary:
     summary = ConversionSummary()
 
     episodes: list[EpisodeFrames] = []
-    n_joints: int | None = None
+    state_dim: int | None = None
     for sequence in export.sequences:
         try:
             episode = build_episode(export, sequence, config)
@@ -245,19 +266,22 @@ def convert(config: ConversionConfig) -> ConversionSummary:
                 f"only {episode.n_frames} frames (min {config.min_frames})",
             )
             continue
-        if n_joints is None:
-            n_joints = episode.actions.shape[1]
-        elif episode.actions.shape[1] != n_joints:
+        if state_dim is None:
+            state_dim = episode.actions.shape[1]
+        elif episode.actions.shape[1] != state_dim:
             summary.skip(
                 sequence.sequence_id,
-                f"joint count {episode.actions.shape[1]} != {n_joints}",
+                f"state dim {episode.actions.shape[1]} != {state_dim}",
             )
             continue
         episodes.append(episode)
 
     if not episodes:
         raise ValueError("No convertible episodes found in the export")
-    assert n_joints is not None
+    assert state_dim is not None
+    state_names = (
+        POSE_NAMES if config.action_space == "delta-ee" else joint_names(state_dim)
+    )
 
     image_shapes = {
         camera: _load_image(episodes[0].images[camera][0]).shape
@@ -267,14 +291,14 @@ def convert(config: ConversionConfig) -> ConversionSummary:
         "Converting %d episodes (%d frames total): state/action dim %d, cameras %s",
         len(episodes),
         sum(e.n_frames for e in episodes),
-        n_joints,
+        state_dim,
         {c: "x".join(map(str, s)) for c, s in image_shapes.items()},
     )
 
     dataset = LeRobotDataset.create(
         repo_id=config.repo_id,
         fps=config.fps,
-        features=_build_features(n_joints, image_shapes),
+        features=_build_features(state_names, image_shapes),
         root=config.output_root,
     )
     try:

@@ -13,6 +13,7 @@ from viam_sequence_to_lerobot.convert import (
     convert,
 )
 from viam_sequence_to_lerobot.export_reader import load_export
+from viam_sequence_to_lerobot.pose import POSE_NAMES, pose_compose
 
 from conftest import (
     CAMERA,
@@ -113,6 +114,65 @@ def test_convert_end_to_end(synthetic_export, tmp_path):
 
     # action[t] == state[t+1] survives the round trip.
     torch.testing.assert_close(frame["action"], dataset[1]["observation.state"])
+
+
+def test_build_episode_delta_ee(synthetic_export, tmp_path):
+    export = load_export(synthetic_export)
+    config = make_config(synthetic_export, tmp_path, action_space="delta-ee")
+    episode = build_episode(export, export.sequences[0], config)
+
+    # EndPosition covers every tick, including the one with no joint reading,
+    # so only the final tick is consumed (as the last delta target).
+    assert episode.n_frames == GOOD_TICKS - 1
+    assert episode.states.shape == (GOOD_TICKS - 1, 6)
+    assert episode.actions.shape == (GOOD_TICKS - 1, 6)
+    # Composing each state with its delta action reproduces the next state.
+    for t in range(episode.n_frames - 1):
+        np.testing.assert_allclose(
+            pose_compose(
+                episode.states[t].astype(np.float64),
+                episode.actions[t].astype(np.float64),
+            ),
+            episode.states[t + 1],
+            atol=1e-4,
+        )
+
+
+def test_build_episode_delta_ee_missing_endposition_skips(synthetic_export, tmp_path):
+    export = load_export(synthetic_export)
+    config = make_config(
+        synthetic_export, tmp_path, action_space="delta-ee", arm_component="no-such-arm"
+    )
+    with pytest.raises(EpisodeSkip, match="EndPosition"):
+        build_episode(export, export.sequences[0], config)
+
+
+def test_convert_end_to_end_delta_ee(synthetic_export, tmp_path):
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    config = make_config(synthetic_export, tmp_path, action_space="delta-ee")
+    summary = convert(config)
+
+    assert summary.episodes_written == 1
+    assert summary.frames_written == GOOD_TICKS - 1
+
+    dataset = LeRobotDataset(repo_id=config.repo_id, root=config.output_root)
+    assert dataset.meta.features["observation.state"]["names"] == POSE_NAMES
+    assert dataset.meta.features["action"]["names"] == POSE_NAMES
+
+    first, second = dataset[0], dataset[1]
+    assert first["observation.state"].shape == (6,)
+    assert first["action"].shape == (6,)
+    composed = pose_compose(
+        first["observation.state"].numpy().astype(np.float64),
+        first["action"].numpy().astype(np.float64),
+    )
+    np.testing.assert_allclose(composed, second["observation.state"].numpy(), atol=1e-4)
+
+
+def test_config_rejects_unknown_action_space(synthetic_export, tmp_path):
+    with pytest.raises(ValueError, match="action_space"):
+        make_config(synthetic_export, tmp_path, action_space="bogus")
 
 
 def test_convert_fails_without_episodes(synthetic_export, tmp_path):
