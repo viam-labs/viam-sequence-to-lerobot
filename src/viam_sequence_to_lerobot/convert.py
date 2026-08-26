@@ -7,8 +7,9 @@ Mapping (Viam capture -> LeRobot feature):
   arm ``JointPositions`` (N joints)  -> ``observation.state``;
   ``JointPositions`` at the next tick -> ``action`` (next-state-as-action)
 - ``action_space="delta-ee"``:
-  arm ``EndPosition`` as ``[x, y, z, rx, ry, rz]`` -> ``observation.state``;
-  body-frame delta to the next tick's pose -> ``action``
+  arm ``EndPosition`` as ``[x, y, z]`` plus the first two rotation-matrix rows
+  (9 dims) -> ``observation.state``; body-frame delta to the next tick's pose,
+  translation plus axis-angle (6 dims) -> ``action``
 
 Joint readings and the frames of every non-clock camera are matched to each
 clock tick by nearest timestamp within ``tolerance_s``; ticks that cannot be
@@ -28,7 +29,7 @@ from PIL import Image
 
 from .align import align_streams, median_spacing
 from .export_reader import Sequence, SequenceExport, load_export
-from .pose import POSE_NAMES, pose_delta, pose_vector
+from .pose import ACTION_NAMES, STATE_NAMES, pose_state, state_delta
 
 logger = logging.getLogger(__name__)
 
@@ -74,8 +75,8 @@ class EpisodeFrames:
 
     sequence: Sequence
     images: dict[str, list[Path]]  # camera component -> one path per frame
-    states: np.ndarray  # (n_frames, n_joints) float32
-    actions: np.ndarray  # (n_frames, n_joints) float32, next-tick joints
+    states: np.ndarray  # (n_frames, state_dim) float32
+    actions: np.ndarray  # (n_frames, action_dim) float32
 
     @property
     def n_frames(self) -> int:
@@ -198,10 +199,13 @@ def build_episode(
         raise EpisodeSkip("fewer than 2 fully aligned frames")
 
     if delta_ee:
-        poses = np.stack([pose_vector(r.payload) for r in aligned["ee"]])
+        try:
+            poses = np.stack([pose_state(r.payload) for r in aligned["ee"]])
+        except (KeyError, ValueError) as exc:
+            raise EpisodeSkip(f"unusable EndPosition reading: {exc}") from exc
         states = poses[:-1].astype(np.float32)
         actions = np.stack(
-            [pose_delta(poses[i], poses[i + 1]) for i in range(len(poses) - 1)]
+            [state_delta(poses[i], poses[i + 1]) for i in range(len(poses) - 1)]
         ).astype(np.float32)
     else:
         joints = np.array([joint_values(r.payload) for r in aligned["joints"]], dtype=np.float32)
@@ -221,7 +225,9 @@ def _load_image(path: Path) -> np.ndarray:
 
 
 def _build_features(
-    state_names: list[str], image_shapes: dict[str, tuple[int, int, int]]
+    state_names: list[str],
+    action_names: list[str],
+    image_shapes: dict[str, tuple[int, int, int]],
 ) -> dict:
     features = {
         "observation.state": {
@@ -231,8 +237,8 @@ def _build_features(
         },
         "action": {
             "dtype": "float32",
-            "shape": (len(state_names),),
-            "names": state_names,
+            "shape": (len(action_names),),
+            "names": action_names,
         },
     }
     for camera, shape in image_shapes.items():
@@ -253,7 +259,7 @@ def convert(config: ConversionConfig) -> ConversionSummary:
     summary = ConversionSummary()
 
     episodes: list[EpisodeFrames] = []
-    state_dim: int | None = None
+    dims: tuple[int, int] | None = None
     for sequence in export.sequences:
         try:
             episode = build_episode(export, sequence, config)
@@ -266,39 +272,43 @@ def convert(config: ConversionConfig) -> ConversionSummary:
                 f"only {episode.n_frames} frames (min {config.min_frames})",
             )
             continue
-        if state_dim is None:
-            state_dim = episode.actions.shape[1]
-        elif episode.actions.shape[1] != state_dim:
+        episode_dims = (episode.states.shape[1], episode.actions.shape[1])
+        if dims is None:
+            dims = episode_dims
+        elif episode_dims != dims:
             summary.skip(
                 sequence.sequence_id,
-                f"state dim {episode.actions.shape[1]} != {state_dim}",
+                f"state/action dims {episode_dims} != {dims}",
             )
             continue
         episodes.append(episode)
 
     if not episodes:
         raise ValueError("No convertible episodes found in the export")
-    assert state_dim is not None
-    state_names = (
-        POSE_NAMES if config.action_space == "delta-ee" else joint_names(state_dim)
-    )
+    assert dims is not None
+    state_dim, action_dim = dims
+    if config.action_space == "delta-ee":
+        state_names, action_names = STATE_NAMES, ACTION_NAMES
+    else:
+        state_names = action_names = joint_names(state_dim)
 
     image_shapes = {
         camera: _load_image(episodes[0].images[camera][0]).shape
         for camera in config.camera_components
     }
     logger.info(
-        "Converting %d episodes (%d frames total): state/action dim %d, cameras %s",
+        "Converting %d episodes (%d frames total): state dim %d, action dim %d, cameras %s",
         len(episodes),
         sum(e.n_frames for e in episodes),
         state_dim,
+        action_dim,
         {c: "x".join(map(str, s)) for c, s in image_shapes.items()},
     )
 
     dataset = LeRobotDataset.create(
         repo_id=config.repo_id,
         fps=config.fps,
-        features=_build_features(state_names, image_shapes),
+        features=_build_features(state_names, action_names, image_shapes),
         root=config.output_root,
     )
     try:

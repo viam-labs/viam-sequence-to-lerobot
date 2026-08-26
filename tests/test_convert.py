@@ -13,7 +13,7 @@ from viam_sequence_to_lerobot.convert import (
     convert,
 )
 from viam_sequence_to_lerobot.export_reader import load_export
-from viam_sequence_to_lerobot.pose import POSE_NAMES, pose_compose
+from viam_sequence_to_lerobot.pose import ACTION_NAMES, STATE_NAMES, state_compose
 
 from conftest import (
     CAMERA,
@@ -124,12 +124,12 @@ def test_build_episode_delta_ee(synthetic_export, tmp_path):
     # EndPosition covers every tick, including the one with no joint reading,
     # so only the final tick is consumed (as the last delta target).
     assert episode.n_frames == GOOD_TICKS - 1
-    assert episode.states.shape == (GOOD_TICKS - 1, 6)
+    assert episode.states.shape == (GOOD_TICKS - 1, 9)
     assert episode.actions.shape == (GOOD_TICKS - 1, 6)
     # Composing each state with its delta action reproduces the next state.
     for t in range(episode.n_frames - 1):
         np.testing.assert_allclose(
-            pose_compose(
+            state_compose(
                 episode.states[t].astype(np.float64),
                 episode.actions[t].astype(np.float64),
             ),
@@ -138,12 +138,38 @@ def test_build_episode_delta_ee(synthetic_export, tmp_path):
         )
 
 
+def test_build_episode_delta_ee_state_is_continuous(synthetic_export, tmp_path):
+    # Consecutive states must move no further than the tool actually moved.
+    # Guards the schema against a discontinuous rotation encoding, which the
+    # compose round trip above cannot see.
+    export = load_export(synthetic_export)
+    config = make_config(synthetic_export, tmp_path, action_space="delta-ee")
+    episode = build_episode(export, export.sequences[0], config)
+
+    state_jumps = np.linalg.norm(np.diff(episode.states[:, 3:], axis=0), axis=1)
+    action_rotations = np.linalg.norm(episode.actions[:-1, 3:], axis=1)
+    assert np.all(state_jumps <= 2 * action_rotations + 1e-5)
+
+
 def test_build_episode_delta_ee_missing_endposition_skips(synthetic_export, tmp_path):
     export = load_export(synthetic_export)
     config = make_config(
         synthetic_export, tmp_path, action_space="delta-ee", arm_component="no-such-arm"
     )
     with pytest.raises(EpisodeSkip, match="EndPosition"):
+        build_episode(export, export.sequences[0], config)
+
+
+def test_build_episode_delta_ee_skips_unusable_endposition(synthetic_export, tmp_path):
+    # A zero orientation vector must skip the sequence, not write NaN or abort
+    # the whole run.
+    export = load_export(synthetic_export)
+    config = make_config(synthetic_export, tmp_path, action_space="delta-ee")
+    rows = export.tabular_rows(
+        export.sequences[0].sequence_id, config.arm_component, "EndPosition"
+    )
+    rows[0].payload["pose"].update(o_x=0.0, o_y=0.0, o_z=0.0)
+    with pytest.raises(EpisodeSkip, match="unusable EndPosition"):
         build_episode(export, export.sequences[0], config)
 
 
@@ -157,13 +183,13 @@ def test_convert_end_to_end_delta_ee(synthetic_export, tmp_path):
     assert summary.frames_written == GOOD_TICKS - 1
 
     dataset = LeRobotDataset(repo_id=config.repo_id, root=config.output_root)
-    assert dataset.meta.features["observation.state"]["names"] == POSE_NAMES
-    assert dataset.meta.features["action"]["names"] == POSE_NAMES
+    assert dataset.meta.features["observation.state"]["names"] == STATE_NAMES
+    assert dataset.meta.features["action"]["names"] == ACTION_NAMES
 
     first, second = dataset[0], dataset[1]
-    assert first["observation.state"].shape == (6,)
+    assert first["observation.state"].shape == (9,)
     assert first["action"].shape == (6,)
-    composed = pose_compose(
+    composed = state_compose(
         first["observation.state"].numpy().astype(np.float64),
         first["action"].numpy().astype(np.float64),
     )

@@ -40,13 +40,22 @@ Semantics (run `--help` for all flags):
 - `--action-space joints` (default): `observation.state` = joint angles;
   `action` = joint angles at the next frame (next-state-as-action).
   Viam-native units are kept (degrees).
-- `--action-space delta-ee`: `observation.state` = the absolute end-effector
-  pose `[x, y, z, rx, ry, rz]` from the arm's `EndPosition` readings —
-  millimeters as captured, orientation as an axis-angle rotation vector in
-  radians (converted from Viam's orientation vector). `action` = the
-  body-frame delta from each frame's pose to the next: xyz difference plus
-  the relative rotation `R_t⁻¹·R_{t+1}` as a rotation vector. Sequences with
-  no `EndPosition` readings are skipped.
+- `--action-space delta-ee`, built from the arm's `EndPosition` readings.
+  `observation.state` is 9 dims — `[x, y, z]` in millimeters as captured,
+  then `[r00, r01, r02, r10, r11, r12]`, the first two rows of the pose's
+  3×3 rotation matrix, row-major. `action` is 6 dims — `[dx, dy, dz]` in
+  millimeters plus `[drx, dry, drz]`, the body-frame relative rotation
+  `R_t⁻¹·R_{t+1}` as an axis-angle vector in radians. Sequences with no
+  `EndPosition` readings, or with an unusable one, are skipped.
+
+  The state spends six dims on rotation because no three-number encoding is
+  continuous everywhere, and this arm works right where that bites: holding
+  the tool near-vertical puts its rotation angle within 0.03 rad of π, where
+  an axis-angle state flips sign under physically smooth motion. Matrix rows
+  have no such branch cut. Actions stay minimal because per-tick rotations
+  are ~0.02 rad — two orders of magnitude clear of the cut — and are better
+  conditioned as three zero-centred numbers than as rows whose diagonal
+  entries would be pinned at 1.
 - Sequences missing a listed camera and episodes shorter than `--min-frames`
   are skipped, with reasons logged.
 - Frames are encoded as MP4 video; the output loads with `LeRobotDataset`
@@ -75,11 +84,25 @@ lerobot-train \
 - The inference client must mirror the dataset contract. For `joints`
   datasets: build the state from `JointPositions` (degrees) exactly as
   captured, and send the policy's output to `MoveToJointPositions` (degrees).
-  For `delta-ee` datasets: build the state from `EndPosition` as
-  `[x, y, z, rx, ry, rz]` (mm, axis-angle radians — same conversion as
-  `viam_sequence_to_lerobot.pose.pose_vector`), compose each predicted delta
-  onto the live pose with `pose_compose` (translation adds; rotation
-  right-multiplies), and send the result to `MoveToPosition`.
+  For `delta-ee` datasets, use the helpers in
+  `viam_sequence_to_lerobot.pose` so the encoding cannot drift apart from the
+  converter's:
+
+  ```python
+  from viam_sequence_to_lerobot.pose import (
+      orientation_vector, pose_state, state_compose, state_rotation,
+  )
+
+  state = pose_state({"pose": pose_fields})        # live EndPosition -> 9 dims
+  delta = policy(state, images, task)              # 6 dims
+  target = state_compose(state, delta)             # 9 dims
+  arm.move_to_position(Pose(*target[:3], **orientation_vector(state_rotation(target))))
+  ```
+
+  Two ways to get this silently wrong: transposing the rotation (the state
+  holds matrix *rows*), and left-multiplying the delta, which applies it in
+  the world frame instead of the body frame. `state_compose` does both
+  correctly; call it rather than reimplementing it.
 
 ### Camera keys
 

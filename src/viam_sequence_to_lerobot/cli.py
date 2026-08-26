@@ -22,10 +22,12 @@ Each Viam sequence becomes one episode. The camera stream provides the frame
 clock; arm readings are matched to each frame by nearest timestamp. With
 --action-space joints (default), observation.state is the joint angles at each
 frame and action is the joint angles at the next frame. With --action-space
-delta-ee, observation.state is the absolute end-effector pose [x,y,z,rx,ry,rz]
-(mm, axis-angle radians) from EndPosition readings and action is the body-frame
-delta to the next frame's pose. Camera frames are encoded as MP4 video. The
-result loads with LeRobotDataset and trains with lerobot-train as-is.
+delta-ee, observation.state is the absolute end-effector pose as [x,y,z] in mm
+plus the first two rows of its rotation matrix (9 dims), and action is the
+body-frame delta to the next frame's pose as [dx,dy,dz] in mm plus an
+axis-angle rotation in radians (6 dims). Camera frames are encoded as MP4
+video. The result loads with LeRobotDataset and trains with lerobot-train
+as-is.
 """
 
 
@@ -91,8 +93,9 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("joints", "delta-ee"),
         default="joints",
         help="joints: state/action are JointPositions angles (action = next "
-        "frame's joints). delta-ee: state is the absolute EndPosition pose "
-        "[x,y,z,rx,ry,rz] and action is the delta to the next frame's pose; "
+        "frame's joints). delta-ee: state is the absolute EndPosition pose as "
+        "[x,y,z] plus two rotation-matrix rows (9 dims) and action is the "
+        "body-frame delta as [dx,dy,dz] plus an axis-angle rotation (6 dims); "
         "at inference, compose the delta onto the live EndPosition and call "
         "MoveToPosition (default: %(default)s)",
     )
