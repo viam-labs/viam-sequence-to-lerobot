@@ -104,6 +104,16 @@ lerobot-train \
   the world frame instead of the body frame. `state_compose` does both
   correctly; call it rather than reimplementing it.
 
+  **Do not decode the orientation vector with `viam.spatialmath` instead.**
+  `pose_rotation` follows Go rdk, which pins the longitude whenever
+  `1 - abs(o_z)` is within `1e-4` of either pole. rust-utils checks only
+  `1.0 - val`, so inside `1e-4` of *straight down* it disagrees with rdk — and
+  with this converter — by up to 63°. That band is reachable here: on the
+  workshop export, 296 of 35334 readings (0.84%) sit inside it, and every
+  reading is down-facing. `tests/test_pose_parity.py` pins agreement with the
+  SDK everywhere else and carries a strict-xfail canary for the band; when
+  that canary starts passing, upstream has fixed it and the warning can go.
+
 ### Camera keys
 
 `smolvla_base` declares three image features (`observation.images.camera1/2/3`),

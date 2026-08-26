@@ -13,7 +13,7 @@ from viam_sequence_to_lerobot.convert import (
     convert,
 )
 from viam_sequence_to_lerobot.export_reader import load_export
-from viam_sequence_to_lerobot.pose import ACTION_NAMES, STATE_NAMES, state_compose
+from viam_sequence_to_lerobot.pose import ACTION_NAMES, STATE_NAMES, pose_state, state_compose
 
 from conftest import (
     CAMERA,
@@ -126,7 +126,9 @@ def test_build_episode_delta_ee(synthetic_export, tmp_path):
     assert episode.n_frames == GOOD_TICKS - 1
     assert episode.states.shape == (GOOD_TICKS - 1, 9)
     assert episode.actions.shape == (GOOD_TICKS - 1, 6)
-    # Composing each state with its delta action reproduces the next state.
+    # With no gaps every written frame is the next tick, so the compose chain
+    # closes frame to frame. That is a property of gapless alignment, not of
+    # the schema: see the gap test below for the contract that always holds.
     for t in range(episode.n_frames - 1):
         np.testing.assert_allclose(
             state_compose(
@@ -149,6 +151,61 @@ def test_build_episode_delta_ee_state_is_continuous(synthetic_export, tmp_path):
     state_jumps = np.linalg.norm(np.diff(episode.states[:, 3:], axis=0), axis=1)
     action_rotations = np.linalg.norm(episode.actions[:-1, 3:], axis=1)
     assert np.all(state_jumps <= 2 * action_rotations + 1e-5)
+
+
+def test_build_episode_delta_ee_drops_deltas_spanning_a_gap(synthetic_export, tmp_path):
+    # The wrist camera has no frame at DROPPED_WRIST_TICK, so alignment leaves a
+    # hole and the delta across it would report two ticks of motion as one
+    # frame's worth. That frame must be dropped, not mislabelled.
+    export = load_export(synthetic_export)
+    config = make_config(
+        synthetic_export,
+        tmp_path,
+        action_space="delta-ee",
+        camera_components=(CAMERA, WRIST_CAMERA),
+    )
+    episode = build_episode(export, export.sequences[0], config)
+
+    # One tick is unaligned, so GOOD_TICKS - 1 candidate frames; the one whose
+    # delta would span the hole is dropped too.
+    assert episode.n_frames == GOOD_TICKS - 3
+    assert len(episode.images[CAMERA]) == episode.n_frames
+    assert len(episode.images[WRIST_CAMERA]) == episode.n_frames
+
+    # Every surviving action must be one tick's worth of motion. The fixture
+    # advances the pose by a fixed step per tick, so a spanning delta would
+    # stand out as a multiple of the rest.
+    steps = np.linalg.norm(episode.actions[:, :3], axis=1)
+    assert steps.max() < 1.5 * np.median(steps)
+
+    # The contract that holds with or without gaps: each action is exactly one
+    # tick of real motion from its own state. The chain across written frames
+    # does NOT close where a frame was dropped -- that frame's target is a tick
+    # the dataset no longer carries -- so verify each pair against the source
+    # instead of against the next written frame.
+    poses = np.stack(
+        [
+            pose_state(r.payload)
+            for r in export.tabular_rows(
+                export.sequences[0].sequence_id, config.arm_component, "EndPosition"
+            )
+        ]
+    )
+    ticks = [r.timestamp for r in export.binary_rows(export.sequences[0].sequence_id, CAMERA)]
+    assert len(poses) == len(ticks), "fixture pairs one EndPosition reading per tick"
+    matched = 0
+    for t in range(episode.n_frames):
+        tick = int(np.argmin(np.abs(episode.states[t][0] - poses[:, 0])))
+        np.testing.assert_allclose(
+            state_compose(
+                episode.states[t].astype(np.float64),
+                episode.actions[t].astype(np.float64),
+            ),
+            poses[tick + 1],
+            atol=1e-4,
+        )
+        matched += 1
+    assert matched == episode.n_frames
 
 
 def test_build_episode_delta_ee_missing_endposition_skips(synthetic_export, tmp_path):

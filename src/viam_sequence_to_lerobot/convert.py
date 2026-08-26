@@ -203,17 +203,34 @@ def build_episode(
             poses = np.stack([pose_state(r.payload) for r in aligned["ee"]])
         except (KeyError, ValueError) as exc:
             raise EpisodeSkip(f"unusable EndPosition reading: {exc}") from exc
-        states = poses[:-1].astype(np.float32)
+        # A delta is only honest between adjacent clock ticks. Where alignment
+        # dropped ticks, the delta across the gap would report several ticks of
+        # motion as one frame's worth, so the frame that would carry it is
+        # dropped rather than mislabelled. Absolute next-state actions do not
+        # need this: a further-away target is still a reachable target.
+        frame_idx = [i for i in range(len(kept) - 1) if kept[i + 1] == kept[i] + 1]
+        n_spanning = len(kept) - 1 - len(frame_idx)
+        if n_spanning:
+            logger.info(
+                "Sequence %s: dropped %d/%d frames whose delta would span a gap",
+                sequence.sequence_id,
+                n_spanning,
+                len(kept) - 1,
+            )
+        if not frame_idx:
+            raise EpisodeSkip("no two consecutive aligned ticks to form a delta")
+        states = poses[frame_idx].astype(np.float32)
         actions = np.stack(
-            [state_delta(poses[i], poses[i + 1]) for i in range(len(poses) - 1)]
+            [state_delta(poses[i], poses[i + 1]) for i in frame_idx]
         ).astype(np.float32)
     else:
         joints = np.array([joint_values(r.payload) for r in aligned["joints"]], dtype=np.float32)
+        frame_idx = list(range(len(kept) - 1))
         states = joints[:-1]
         actions = joints[1:]  # command for tick t is the measured joints at tick t+1
-    images = {config.clock_camera: [clock_rows[i].path for i in kept[:-1]]}
+    images = {config.clock_camera: [clock_rows[kept[i]].path for i in frame_idx]}
     for name in config.camera_components[1:]:
-        images[name] = [r.path for r in aligned[name][:-1]]
+        images[name] = [aligned[name][i].path for i in frame_idx]
     return EpisodeFrames(
         sequence=sequence, images=images, states=states, actions=actions
     )
