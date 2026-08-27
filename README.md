@@ -80,7 +80,7 @@ lerobot-train \
 - The inference client must mirror the dataset contract. For `joints`
   datasets: build the state from `JointPositions` (degrees) exactly as
   captured, and send the policy's output to `MoveToJointPositions` (degrees).
-  For `delta-ee` datasets, use the helpers in
+  For `delta-ee` datasets, use or copy the helpers in
   `viam_sequence_to_lerobot.pose` so the encoding cannot drift apart from the
   converter's:
 
@@ -99,15 +99,6 @@ lerobot-train \
   holds matrix *rows*), and left-multiplying the delta, which applies it in the
   world frame instead of the body frame. `state_compose` does both correctly;
   call it rather than reimplementing it.
-
-  `pose_rotation` decodes the orientation vector with `viam.spatialmath`, so an
-  SDK-based client agrees with the dataset by construction. One caveat inherited
-  from rust-utils: it pins the orientation vector's longitude only near
-  `o_z = +1`, while Go rdk pins it near both poles, so within `1e-4` of straight
-  down the two differ by exactly that longitude. Every in-band reading in this
-  export has `o_y` at ~0, so the longitude is ~0 and nothing diverges.
-  `tests/test_pose.py` carries canaries that pin this and flag when upstream
-  adds the missing `abs`.
 
 ### Camera keys
 
