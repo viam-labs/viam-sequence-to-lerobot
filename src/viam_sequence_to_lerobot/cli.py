@@ -112,9 +112,9 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         metavar="SECONDS",
         default=0.05,
-        help="maximum clock offset allowed when matching a joint reading to a "
-        "camera frame; frames with no reading within this window are dropped "
-        "(default: %(default)s)",
+        help="maximum clock offset allowed when matching an arm reading or a "
+        "non-clock camera frame to a clock tick; ticks with no match within "
+        "this window are dropped (default: %(default)s)",
     )
     parser.add_argument(
         "--min-frames",
@@ -129,10 +129,13 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         metavar="N",
         default=None,
-        help="downscale every camera frame to NxN before encoding. VLA "
-        "backbones resize to a square anyway (EVO1/InternVL3 uses 448), so "
-        "this mostly removes wasted encode time, disk, and per-epoch decode "
-        "cost. Omit to keep the captured resolution",
+        help="downscale camera frames so the longest side is N, keeping the "
+        "aspect ratio. Policies square images differently -- EVO1/InternVL3 "
+        "squashes to 448, SmolVLA letterboxes to 512 -- so scaling "
+        "proportionally stays faithful to both while cutting encode time, "
+        "disk, and per-epoch decode cost. Note the SHORT side is what a "
+        "squashing policy sees: for 448 square, keep the short side >= 448. "
+        "Omit to keep the captured resolution",
     )
     parser.add_argument(
         "-v",

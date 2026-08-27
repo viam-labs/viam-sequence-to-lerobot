@@ -11,11 +11,13 @@ Mapping (Viam capture -> LeRobot feature):
   (9 dims) -> ``observation.state``; body-frame delta to the next tick's pose,
   translation plus axis-angle (6 dims) -> ``action``
 
-Joint readings and the frames of every non-clock camera are matched to each
+Arm readings and the frames of every non-clock camera are matched to each
 clock tick by nearest timestamp within ``tolerance_s``; ticks that cannot be
 fully matched are dropped. Sequences missing any configured camera entirely
 are skipped. The last tick of each episode is consumed as the final action
-target and is not written as a frame.
+target and is not written as a frame. In ``delta-ee`` mode a frame whose delta
+would span one of those dropped ticks is dropped as well, since the delta
+across a gap would report several ticks of motion as one frame's worth.
 """
 
 from __future__ import annotations
