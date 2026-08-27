@@ -40,22 +40,18 @@ Semantics (run `--help` for all flags):
 - `--action-space joints` (default): `observation.state` = joint angles;
   `action` = joint angles at the next frame (next-state-as-action).
   Viam-native units are kept (degrees).
-- `--action-space delta-ee`, built from the arm's `EndPosition` readings.
-  `observation.state` is 9 dims — `[x, y, z]` in millimeters as captured,
-  then `[r00, r01, r02, r10, r11, r12]`, the first two rows of the pose's
-  3×3 rotation matrix, row-major. `action` is 6 dims — `[dx, dy, dz]` in
-  millimeters plus `[drx, dry, drz]`, the body-frame relative rotation
-  `R_t⁻¹·R_{t+1}` as an axis-angle vector in radians. Sequences with no
-  `EndPosition` readings, or with an unusable one, are skipped.
+- `--action-space delta-ee`, from the arm's `EndPosition` readings.
+  `observation.state` is 9 dims: `[x, y, z]` in millimeters, then
+  `[r00, r01, r02, r10, r11, r12]` — the first two rows of the pose's 3×3
+  rotation matrix. `action` is 6 dims: `[dx, dy, dz]` in millimeters plus
+  `[drx, dry, drz]`, the body-frame rotation `R_t⁻¹·R_{t+1}` as an axis-angle
+  vector in radians. Sequences with no usable `EndPosition` are skipped, and so
+  is any frame whose delta would span a gap in the alignment.
 
-  The state spends six dims on rotation because no three-number encoding is
-  continuous everywhere, and this arm works right where that bites: holding
-  the tool near-vertical puts its rotation angle within 0.03 rad of π, where
-  an axis-angle state flips sign under physically smooth motion. Matrix rows
-  have no such branch cut. Actions stay minimal because per-tick rotations
-  are ~0.02 rad — two orders of magnitude clear of the cut — and are better
-  conditioned as three zero-centred numbers than as rows whose diagonal
-  entries would be pinned at 1.
+  Rotation takes six dims because no three-number encoding is continuous
+  everywhere, and this arm holds its tool within 0.03 rad of π — exactly where
+  an axis-angle state flips sign under smooth motion. Actions keep three
+  because a per-tick rotation is ~0.02 rad, far from that cut.
 - Sequences missing a listed camera and episodes shorter than `--min-frames`
   are skipped, with reasons logged.
 - Frames are encoded as MP4 video; the output loads with `LeRobotDataset`
@@ -100,23 +96,15 @@ lerobot-train \
   ```
 
   Two ways to get this silently wrong: transposing the rotation (the state
-  holds matrix *rows*), and left-multiplying the delta, which applies it in
-  the world frame instead of the body frame. `state_compose` does both
-  correctly; call it rather than reimplementing it.
+  holds matrix *rows*), and left-multiplying the delta, which applies it in the
+  world frame instead of the body frame. `state_compose` does both correctly;
+  call it rather than reimplementing it.
 
-  **Decode with `pose_rotation`, not `viam.spatialmath`.** Both agree on every
-  reading in the workshop export, to 1e-15 degrees, so this is about staying
-  safe rather than fixing a live error. `pose_rotation` follows Go rdk, which
-  pins the longitude whenever `1 - abs(o_z)` is within `1e-4` of *either* pole;
-  rust-utils tests only `1.0 - val`, so within `1e-4` of straight down it keeps
-  a longitude rdk discards, and the two rotations then differ by exactly that
-  longitude. 296 of 35334 readings (0.84%) sit in that band, but all of them
-  have `o_y` at zero — the tool approaches vertical in the x-z plane — so their
-  longitude is 0 and nothing diverges. That is a property of this robot's
-  motion, not a guarantee: approach vertical from another azimuth and the error
-  grows to the full longitude. `tests/test_pose_parity.py` pins agreement
-  everywhere else and carries a strict-xfail canary for the band; when the
-  canary starts passing, upstream has fixed it and either decoder is fine.
+  Decode with `pose_rotation` rather than `viam.spatialmath`. The two agree on
+  every reading in this export, but within `1e-4` of straight down rust-utils
+  keeps a longitude that Go rdk discards, and the rotations then differ by that
+  longitude. `tests/test_pose_parity.py` pins the agreement and flags when
+  upstream makes either decoder safe.
 
 ### Camera keys
 
