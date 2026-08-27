@@ -75,21 +75,72 @@ def test_orientation_vector_is_the_third_matrix_column():
         np.testing.assert_allclose(rotation.as_matrix()[:, 2], o, atol=1e-12)
 
 
-def test_pole_epsilon_matches_rdk():
-    # rdk's defaultAngleEpsilon is 1e-4: inside that band it zeroes the
-    # longitude. A smaller epsilon here decodes near-vertical poses to a
-    # rotation up to 63 deg away from the one rdk encoded.
-    gap = 1e-5  # 1 - |o_z|, i.e. ~0.26 deg from straight down
-    o_z = -(1 - gap)
-    radius = np.sqrt(1 - o_z**2)
-    pose = {
-        "o_x": radius * np.cos(1.1),
-        "o_y": radius * np.sin(1.1),
+def rdk_rotation(pose: dict) -> Rotation:
+    """Go rdk's decode: pins the longitude near *either* pole.
+
+    Reference implementation from spatialmath/orientationVector.go:131-137,
+    which is what encoded the orientation vectors in the export. pose_rotation
+    now delegates to viam.spatialmath, so the two agree everywhere except the
+    band the canary below pins down.
+    """
+    o = np.array([pose["o_x"], pose["o_y"], pose["o_z"]], dtype=np.float64)
+    o /= np.linalg.norm(o)
+    lat = np.arccos(np.clip(o[2], -1.0, 1.0))
+    lon = np.arctan2(o[1], o[0]) if 1 - abs(o[2]) > 1e-4 else 0.0
+    return Rotation.from_euler("ZYZ", [lon, lat, np.deg2rad(pose["theta"])])
+
+
+def pole_pose(gap: float, sign: float, azimuth: float, theta: float = -35.48) -> dict:
+    """An orientation vector ``gap`` away from a pole, leaning toward ``azimuth``."""
+    o_z = sign * (1 - gap)
+    radius = np.sqrt(max(0.0, 1 - o_z**2))
+    return {
+        "o_x": radius * np.cos(azimuth),
+        "o_y": radius * np.sin(azimuth),
         "o_z": o_z,
-        "theta": -35.48,
+        "theta": theta,
     }
-    rdk = Rotation.from_euler("ZYZ", [0.0, np.arccos(o_z), np.deg2rad(pose["theta"])])
-    assert np.degrees((pose_rotation(pose).inv() * rdk).magnitude()) < 1e-9
+
+
+def test_matches_rdk_away_from_the_poles():
+    rng = np.random.default_rng(3)
+    for _ in range(500):
+        o = rng.normal(size=3)
+        o /= np.linalg.norm(o)
+        pose = {"o_x": o[0], "o_y": o[1], "o_z": o[2], "theta": rng.uniform(-180, 180)}
+        if 1 - abs(pose["o_z"]) <= 1e-4:
+            continue
+        assert (pose_rotation(pose).inv() * rdk_rotation(pose)).magnitude() < 1e-9
+
+
+def test_matches_rdk_inside_the_north_pole_band():
+    # Both pin the longitude here, so they agree.
+    for gap in (1e-6, 5e-5):
+        pose = pole_pose(gap, +1.0, azimuth=1.1)
+        assert (pose_rotation(pose).inv() * rdk_rotation(pose)).magnitude() < 1e-9
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="Inherited from rust-utils via viam.spatialmath: its OV decode pins "
+    "the longitude only near o_z=+1 (`1.0 - val > ANGLE_ACCEPTANCE`, no abs, "
+    "src/spatialmath/utils.rs:135), so within 1e-4 of straight down it keeps a "
+    "longitude that Go rdk discards and the rotations differ by exactly that "
+    "longitude. Harmless on the workshop export, where every in-band reading "
+    "has o_y at ~0 so the longitude is ~0. When this XPASSes, upstream has "
+    "added the abs and the divergence is gone.",
+)
+def test_matches_rdk_inside_the_south_pole_band():
+    pose = pole_pose(1e-5, -1.0, azimuth=np.deg2rad(45.0))
+    assert (pose_rotation(pose).inv() * rdk_rotation(pose)).magnitude() < 1e-9
+
+
+def test_south_pole_divergence_equals_the_longitude():
+    # Pins the shape of the divergence, so a regression cannot quietly grow it.
+    for azimuth_deg in (0.0, 45.0, 90.0):
+        pose = pole_pose(1e-5, -1.0, azimuth=np.deg2rad(azimuth_deg))
+        offset = np.degrees((pose_rotation(pose).inv() * rdk_rotation(pose)).magnitude())
+        assert offset == pytest.approx(azimuth_deg, abs=1e-6)
 
 
 def test_pose_rotation_rejects_zero_orientation_vector():

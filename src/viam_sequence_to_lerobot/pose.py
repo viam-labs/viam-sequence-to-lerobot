@@ -25,55 +25,52 @@ from __future__ import annotations
 
 import numpy as np
 from scipy.spatial.transform import Rotation
+from viam.spatialmath import OrientationVector, Quaternion
 
 STATE_NAMES = ["x", "y", "z", "r00", "r01", "r02", "r10", "r11", "r12"]
 ACTION_NAMES = ["dx", "dy", "dz", "drx", "dry", "drz"]
-
-# How close ``o_z`` must be to +/-1 before the orientation vector counts as
-# being on a pole, where its longitude is undefined and the ZYZ euler split is
-# gimbal locked. Mirrors defaultAngleEpsilon in rdk spatialmath and must keep
-# matching it: at 1e-7 instead, poses within ~0.8 deg of vertical decode to a
-# rotation up to 63 deg away from the one rdk encoded.
-_POLE_EPSILON = 1e-4
 
 
 def pose_rotation(pose: dict) -> Rotation:
     """Rotation described by a Viam pose's orientation vector.
 
-    Mirrors rdk ``spatialmath/orientationVector.go``: the orientation vector is
-    the tool's z axis, decoded as ZYZ euler angles ``(lon=atan2(o_y, o_x),
-    lat=acos(o_z), theta)``, with ``theta`` in degrees as the protobuf ``Pose``
-    carries it.
+    Delegates the convention to ``viam.spatialmath`` so this converter and any
+    SDK-based inference client decode identically. ``theta`` arrives in degrees,
+    as the protobuf ``Pose`` carries it, and the SDK takes radians.
+
+    Note that the SDK pins the orientation vector's longitude only near
+    ``o_z = +1``; rdk pins it near both poles, so within ``1e-4`` of straight
+    down the two differ by exactly that longitude. See the canaries in
+    ``tests/test_pose.py``.
 
     Raises:
         ValueError: If the orientation vector has zero length.
     """
-    o = np.array([pose["o_x"], pose["o_y"], pose["o_z"]], dtype=np.float64)
-    norm = np.linalg.norm(o)
-    if norm == 0.0:
+    if pose["o_x"] == 0.0 and pose["o_y"] == 0.0 and pose["o_z"] == 0.0:
         raise ValueError("orientation vector has zero length (o_x, o_y, o_z all 0)")
-    o /= norm
-    lat = np.arccos(np.clip(o[2], -1.0, 1.0))
-    lon = np.arctan2(o[1], o[0]) if 1.0 - abs(o[2]) > _POLE_EPSILON else 0.0
-    return Rotation.from_euler("ZYZ", [lon, lat, np.deg2rad(pose["theta"])])
+    quaternion = OrientationVector(
+        pose["o_x"], pose["o_y"], pose["o_z"], np.deg2rad(pose["theta"])
+    ).to_quaternion()
+    return Rotation.from_quat(
+        [quaternion.i, quaternion.j, quaternion.k, quaternion.w]
+    )
 
 
 def orientation_vector(rotation: Rotation) -> dict:
     """Viam orientation-vector fields for a rotation; inverse of pose_rotation.
 
-    Returns the tool's z axis as ``o_x``, ``o_y``, ``o_z`` (the third column of
-    the rotation matrix) plus ``theta`` in degrees, ready to drop into a
-    ``Pose`` for ``MoveToPosition``. On a pole the ``(lon, theta)`` split is
-    gimbal locked, so the fields need not match the ones originally captured;
-    the rotation they describe is the same either way.
+    Returns the tool's z axis as ``o_x``, ``o_y``, ``o_z`` plus ``theta`` in
+    degrees, ready to drop into a ``Pose`` for ``MoveToPosition``. On a pole the
+    longitude/theta split is gimbal locked, so the fields need not match the
+    ones originally captured; the rotation they describe is the same either way.
     """
-    o_x, o_y, o_z = rotation.apply([0.0, 0.0, 1.0])
-    theta = rotation.as_euler("ZYZ")[2]
+    i, j, k, w = rotation.as_quat()
+    vector = Quaternion(w, i, j, k).to_orientation_vector()
     return {
-        "o_x": float(o_x),
-        "o_y": float(o_y),
-        "o_z": float(o_z),
-        "theta": float(np.degrees(theta)),
+        "o_x": float(vector.o_x),
+        "o_y": float(vector.o_y),
+        "o_z": float(vector.o_z),
+        "theta": float(np.degrees(vector.theta)),
     }
 
 

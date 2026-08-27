@@ -100,11 +100,14 @@ lerobot-train \
   world frame instead of the body frame. `state_compose` does both correctly;
   call it rather than reimplementing it.
 
-  Decode with `pose_rotation` rather than `viam.spatialmath`. The two agree on
-  every reading in this export, but within `1e-4` of straight down rust-utils
-  keeps a longitude that Go rdk discards, and the rotations then differ by that
-  longitude. `tests/test_pose_parity.py` pins the agreement and flags when
-  upstream makes either decoder safe.
+  `pose_rotation` decodes the orientation vector with `viam.spatialmath`, so an
+  SDK-based client agrees with the dataset by construction. One caveat inherited
+  from rust-utils: it pins the orientation vector's longitude only near
+  `o_z = +1`, while Go rdk pins it near both poles, so within `1e-4` of straight
+  down the two differ by exactly that longitude. Every in-band reading in this
+  export has `o_y` at ~0, so the longitude is ~0 and nothing diverges.
+  `tests/test_pose.py` carries canaries that pin this and flag when upstream
+  adds the missing `abs`.
 
 ### Camera keys
 
