@@ -1,24 +1,16 @@
 """End-effector pose features from Viam ``EndPosition`` payloads.
 
-``observation.state`` is the 9-vector ``[x, y, z, r00, r01, r02, r10, r11,
-r12]``: position in millimeters (as captured) followed by the first two rows of
-the 3x3 rotation matrix, row-major. A rotation matrix varies smoothly
-everywhere in SO(3); no three-number encoding does. That matters here because
-the arm holds its tool near-vertical, where the rotation angle sits within
-0.03 rad of pi -- exactly where an axis-angle state flips sign under
-physically smooth motion.
+``observation.state`` is ``[x, y, z, r00, r01, r02, r10, r11, r12]``:
+millimeters as captured, then the first two ROWS of the 3x3 rotation matrix.
+Rows spend six numbers on rotation because no three-number encoding is
+continuous everywhere, and this arm works where that bites.
 
-``action`` is the 6-vector ``[dx, dy, dz, drx, dry, drz]``: the body-frame
-motion from one tick to the next, a translation difference plus the relative
-rotation ``R_t^-1 . R_t+1`` as an axis-angle vector in radians. Per-tick
-rotations are ~0.02 rad, two orders of magnitude clear of the axis-angle
-branch cut at pi, so three numbers are both safe and better conditioned than
-matrix rows, whose diagonal entries would be pinned at 1.
+``action`` is ``[dx, dy, dz, drx, dry, drz]``: translation difference plus the
+body-frame rotation ``R_t^-1 . R_t+1`` as an axis-angle vector in radians.
 
-``state_delta`` and ``state_compose`` are exact inverses: an inference client
-composes the policy's delta onto the live ``EndPosition`` exactly the way the
-dataset was built, then calls ``orientation_vector`` to get back to a Viam
-pose for ``MoveToPosition``.
+``state_delta`` and ``state_compose`` are exact inverses; an inference client
+composes the policy's delta onto the live pose with ``state_compose``, then
+``orientation_vector`` to get back to a Viam pose for ``MoveToPosition``.
 """
 
 from __future__ import annotations
@@ -32,21 +24,13 @@ ACTION_NAMES = ["dx", "dy", "dz", "drx", "dry", "drz"]
 
 
 def pose_rotation(pose: dict) -> Rotation:
-    """Rotation described by a Viam pose's orientation vector.
+    """Rotation described by a Viam pose's orientation vector, via the SDK.
 
-    Delegates the convention to ``viam.spatialmath`` so this converter and any
-    SDK-based inference client decode identically. ``theta`` arrives in degrees,
-    as the protobuf ``Pose`` carries it, and the SDK takes radians.
-
-    Goes via the SDK's rotation matrix rather than its quaternion so there is no
-    hand-written component reordering: scipy orders a quaternion ``(x, y, z, w)``
-    and the SDK ``(w, i, j, k)``, and getting that backwards yields a plausible
-    but wrong rotation with nothing to catch it. ``RotationMatrix.elements`` is
-    row-major, the same convention ``STATE_NAMES`` stores.
-
-    Note that the SDK pins the orientation vector's longitude only near
-    ``o_z = +1``; rdk pins it near both poles, so within ``1e-4`` of straight
-    down the two differ by exactly that longitude. See the canaries in
+    Goes through the SDK's rotation matrix, not its quaternion, so no component
+    order is written by hand: scipy orders a quaternion ``(x, y, z, w)`` and the
+    SDK ``(w, i, j, k)``. ``theta`` arrives in degrees, as the protobuf ``Pose``
+    carries it. The SDK pins the orientation vector's longitude only near
+    ``o_z = +1`` where rdk pins both poles -- see the canaries in
     ``tests/test_pose.py``.
 
     Raises:
@@ -64,13 +48,9 @@ def pose_rotation(pose: dict) -> Rotation:
 def orientation_vector(rotation: Rotation) -> dict:
     """Viam orientation-vector fields for a rotation; inverse of pose_rotation.
 
-    Returns the tool's z axis as ``o_x``, ``o_y``, ``o_z`` plus ``theta`` in
-    degrees, ready to drop into a ``Pose`` for ``MoveToPosition``. On a pole the
+    ``theta`` comes back in degrees, ready for a ``Pose``. On a pole the
     longitude/theta split is gimbal locked, so the fields need not match the
-    ones originally captured; the rotation they describe is the same either way.
-
-    Hands the SDK a row-major matrix for the same reason ``pose_rotation`` reads
-    one back: it keeps the quaternion component order entirely inside the SDK.
+    ones originally captured; the rotation is the same either way.
     """
     matrix = RotationMatrix(rotation.as_matrix().reshape(9).tolist())
     vector = matrix.to_quaternion().to_orientation_vector()
@@ -95,10 +75,10 @@ def pose_state(payload: dict) -> np.ndarray:
 
 
 def state_rotation(state: np.ndarray) -> Rotation:
-    """Rotation held in a state's two matrix rows, recovered by Gram-Schmidt.
+    """Rotation held in a state's two matrix rows, via Gram-Schmidt.
 
     Any six numbers yield a valid rotation, so a policy's raw output needs no
-    orthogonality constraint -- only the degenerate cases below are rejected.
+    orthogonality constraint.
 
     Raises:
         ValueError: If the first row is zero, or the second is parallel to it.
