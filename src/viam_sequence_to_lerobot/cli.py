@@ -130,12 +130,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="N",
         default=None,
         help="downscale camera frames so the longest side is N, keeping the "
-        "aspect ratio. Policies square images differently -- EVO1/InternVL3 "
-        "squashes to 448, SmolVLA letterboxes to 512 -- so scaling "
-        "proportionally stays faithful to both while cutting encode time, "
-        "disk, and per-epoch decode cost. Note the SHORT side is what a "
-        "squashing policy sees: for 448 square, keep the short side >= 448. "
-        "Omit to keep the captured resolution",
+        "aspect ratio.",
     )
     parser.add_argument(
         "-v",

@@ -256,12 +256,6 @@ def _load_image(path: Path, image_size: int | None = None) -> np.ndarray:
     with Image.open(path) as img:
         img = img.convert("RGB")
         if image_size is not None:
-            # Aspect-preserving, because policies disagree on how to square an
-            # image: EVO1/InternVL3 squashes to 448x448, while SmolVLA
-            # letterboxes with resize_with_pad to 512x512. Downscaling
-            # proportionally leaves either transform to reach the same result it
-            # would have reached from the captured frame, so this stays faithful
-            # to both instead of baking one policy's choice into the dataset.
             img = img.resize(
                 _downscaled_size(img.width, img.height, image_size),
                 Image.Resampling.BICUBIC,

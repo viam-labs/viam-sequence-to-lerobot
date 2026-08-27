@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import numpy as np
 from scipy.spatial.transform import Rotation
-from viam.spatialmath import OrientationVector, Quaternion
+from viam.spatialmath import OrientationVector, RotationMatrix
 
 STATE_NAMES = ["x", "y", "z", "r00", "r01", "r02", "r10", "r11", "r12"]
 ACTION_NAMES = ["dx", "dy", "dz", "drx", "dry", "drz"]
@@ -37,6 +37,12 @@ def pose_rotation(pose: dict) -> Rotation:
     Delegates the convention to ``viam.spatialmath`` so this converter and any
     SDK-based inference client decode identically. ``theta`` arrives in degrees,
     as the protobuf ``Pose`` carries it, and the SDK takes radians.
+
+    Goes via the SDK's rotation matrix rather than its quaternion so there is no
+    hand-written component reordering: scipy orders a quaternion ``(x, y, z, w)``
+    and the SDK ``(w, i, j, k)``, and getting that backwards yields a plausible
+    but wrong rotation with nothing to catch it. ``RotationMatrix.elements`` is
+    row-major, the same convention ``STATE_NAMES`` stores.
 
     Note that the SDK pins the orientation vector's longitude only near
     ``o_z = +1``; rdk pins it near both poles, so within ``1e-4`` of straight
@@ -51,9 +57,8 @@ def pose_rotation(pose: dict) -> Rotation:
     quaternion = OrientationVector(
         pose["o_x"], pose["o_y"], pose["o_z"], np.deg2rad(pose["theta"])
     ).to_quaternion()
-    return Rotation.from_quat(
-        [quaternion.i, quaternion.j, quaternion.k, quaternion.w]
-    )
+    elements = np.asarray(quaternion.to_rotation_matrix().elements, dtype=np.float64)
+    return Rotation.from_matrix(elements.reshape(3, 3))
 
 
 def orientation_vector(rotation: Rotation) -> dict:
@@ -63,9 +68,12 @@ def orientation_vector(rotation: Rotation) -> dict:
     degrees, ready to drop into a ``Pose`` for ``MoveToPosition``. On a pole the
     longitude/theta split is gimbal locked, so the fields need not match the
     ones originally captured; the rotation they describe is the same either way.
+
+    Hands the SDK a row-major matrix for the same reason ``pose_rotation`` reads
+    one back: it keeps the quaternion component order entirely inside the SDK.
     """
-    i, j, k, w = rotation.as_quat()
-    vector = Quaternion(w, i, j, k).to_orientation_vector()
+    matrix = RotationMatrix(rotation.as_matrix().reshape(9).tolist())
+    vector = matrix.to_quaternion().to_orientation_vector()
     return {
         "o_x": float(vector.o_x),
         "o_y": float(vector.o_y),
