@@ -50,6 +50,7 @@ class ConversionConfig:
     fps: int = 10
     tolerance_s: float = 0.05
     min_frames: int = 10
+    image_size: int | None = None
 
     def __post_init__(self) -> None:
         if not self.camera_components:
@@ -58,6 +59,8 @@ class ConversionConfig:
             raise ValueError(
                 f"action_space must be 'joints' or 'delta-ee', got {self.action_space!r}"
             )
+        if self.image_size is not None and self.image_size < 1:
+            raise ValueError(f"image_size must be positive, got {self.image_size}")
 
     @property
     def clock_camera(self) -> str:
@@ -236,9 +239,32 @@ def build_episode(
     )
 
 
-def _load_image(path: Path) -> np.ndarray:
+def _downscaled_size(width: int, height: int, longest: int) -> tuple[int, int]:
+    """Fit ``longest`` on the longer side, keeping aspect ratio and even sides."""
+    scale = min(1.0, longest / max(width, height))
+
+    def even(value: float) -> int:
+        # yuv420 video wants even dimensions; round to even, never below 2.
+        return max(2, int(round(value / 2)) * 2)
+
+    return even(width * scale), even(height * scale)
+
+
+def _load_image(path: Path, image_size: int | None = None) -> np.ndarray:
     with Image.open(path) as img:
-        return np.asarray(img.convert("RGB"))
+        img = img.convert("RGB")
+        if image_size is not None:
+            # Aspect-preserving, because policies disagree on how to square an
+            # image: EVO1/InternVL3 squashes to 448x448, while SmolVLA
+            # letterboxes with resize_with_pad to 512x512. Downscaling
+            # proportionally leaves either transform to reach the same result it
+            # would have reached from the captured frame, so this stays faithful
+            # to both instead of baking one policy's choice into the dataset.
+            img = img.resize(
+                _downscaled_size(img.width, img.height, image_size),
+                Image.Resampling.BICUBIC,
+            )
+        return np.asarray(img)
 
 
 def _build_features(
@@ -310,7 +336,7 @@ def convert(config: ConversionConfig) -> ConversionSummary:
         state_names = action_names = joint_names(state_dim)
 
     image_shapes = {
-        camera: _load_image(episodes[0].images[camera][0]).shape
+        camera: _load_image(episodes[0].images[camera][0], config.image_size).shape
         for camera in config.camera_components
     }
     logger.info(
@@ -335,7 +361,7 @@ def convert(config: ConversionConfig) -> ConversionSummary:
             for i in range(episode.n_frames):
                 frame_images = {}
                 for camera in config.camera_components:
-                    image = _load_image(episode.images[camera][i])
+                    image = _load_image(episode.images[camera][i], config.image_size)
                     if image.shape != image_shapes[camera]:
                         break
                     frame_images[camera_feature_key(camera)] = image

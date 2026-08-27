@@ -8,6 +8,8 @@ from viam_sequence_to_lerobot.align import median_spacing
 from viam_sequence_to_lerobot.convert import (
     ConversionConfig,
     EpisodeSkip,
+    _downscaled_size,
+    _load_image,
     _warn_rate_mismatches,
     build_episode,
     convert,
@@ -17,6 +19,7 @@ from viam_sequence_to_lerobot.pose import ACTION_NAMES, STATE_NAMES, pose_state,
 
 from conftest import (
     CAMERA,
+    GOOD_SEQ,
     DROPPED_JOINT_TICK,
     GOOD_TICKS,
     IMAGE_SIZE,
@@ -310,3 +313,38 @@ def test_rate_check_silent_when_rates_match(synthetic_export, tmp_path, caplog):
     with caplog.at_level("WARNING"):
         build_episode(export, export.sequences[0], config)
     assert "Hz" not in caplog.text
+
+
+def test_image_size_preserves_aspect_ratio(synthetic_export):
+    # Policies disagree on how to square an image (EVO1 squashes to 448, SmolVLA
+    # letterboxes to 512), so the converter must only scale, never reshape.
+    # Asserted on the loader rather than through convert(): a 16x12 video is
+    # small enough to stall the encoder, and _load_image is what feeds both the
+    # declared feature shape and the frames.
+    export = load_export(synthetic_export)
+    path = export.binary_rows(GOOD_SEQ, CAMERA)[0].path
+    src_w, src_h = IMAGE_SIZE  # fixture cameras are 32x24
+
+    full = _load_image(path)
+    assert full.shape == (src_h, src_w, 3)
+
+    scaled = _load_image(path, image_size=16)
+    h, w, c = scaled.shape
+    assert (w, h, c) == (16, 12, 3), "longest side pinned to 16, aspect ratio kept"
+    assert abs(w / h - src_w / src_h) < 1e-6
+
+    # Larger than the source must not upscale.
+    assert _load_image(path, image_size=448).shape == full.shape
+
+
+def test_downscaled_size_keeps_even_sides_and_never_upscales():
+    assert _downscaled_size(1080, 1920, 448) == (252, 448)
+    assert _downscaled_size(1280, 720, 448) == (448, 252)
+    # An odd result is nudged to even for yuv420, and small inputs are untouched.
+    assert all(v % 2 == 0 for v in _downscaled_size(1001, 333, 100))
+    assert _downscaled_size(32, 24, 448) == (32, 24)
+
+
+def test_image_size_rejects_non_positive(synthetic_export, tmp_path):
+    with pytest.raises(ValueError, match="image_size must be positive"):
+        make_config(synthetic_export, tmp_path, image_size=0)

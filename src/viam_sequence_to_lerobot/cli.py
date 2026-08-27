@@ -125,6 +125,16 @@ def build_parser() -> argparse.ArgumentParser:
         "aborted or accidental recordings (default: %(default)s)",
     )
     parser.add_argument(
+        "--image-size",
+        type=int,
+        metavar="N",
+        default=None,
+        help="downscale every camera frame to NxN before encoding. VLA "
+        "backbones resize to a square anyway (EVO1/InternVL3 uses 448), so "
+        "this mostly removes wasted encode time, disk, and per-epoch decode "
+        "cost. Omit to keep the captured resolution",
+    )
+    parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -156,6 +166,7 @@ def main(argv: list[str] | None = None) -> int:
         fps=args.fps,
         tolerance_s=args.tolerance_s,
         min_frames=args.min_frames,
+        image_size=args.image_size,
     )
     try:
         summary = convert(config)
