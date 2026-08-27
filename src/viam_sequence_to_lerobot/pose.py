@@ -112,17 +112,13 @@ def state_rotation(state: np.ndarray) -> Rotation:
     return Rotation.from_matrix(np.stack([b1, b2, np.cross(b1, b2)]))
 
 
-def state_position(state: np.ndarray) -> np.ndarray:
-    """Position in millimeters held in the first three entries of a state."""
-    return np.asarray(state[:3], dtype=np.float64)
-
-
 def state_delta(current: np.ndarray, target: np.ndarray) -> np.ndarray:
     """Body-frame motion from ``current`` to ``target`` as the 6-dim action."""
     relative = state_rotation(current).inv() * state_rotation(target)
-    return np.concatenate(
-        [state_position(target) - state_position(current), relative.as_rotvec()]
+    translation = np.asarray(target[:3], dtype=np.float64) - np.asarray(
+        current[:3], dtype=np.float64
     )
+    return np.concatenate([translation, relative.as_rotvec()])
 
 
 def state_compose(current: np.ndarray, delta: np.ndarray) -> np.ndarray:
@@ -130,9 +126,7 @@ def state_compose(current: np.ndarray, delta: np.ndarray) -> np.ndarray:
     rotation = state_rotation(current) * Rotation.from_rotvec(
         np.asarray(delta[3:6], dtype=np.float64)
     )
-    return np.concatenate(
-        [
-            state_position(current) + np.asarray(delta[:3], dtype=np.float64),
-            rotation.as_matrix()[:2, :].reshape(6),
-        ]
+    position = np.asarray(current[:3], dtype=np.float64) + np.asarray(
+        delta[:3], dtype=np.float64
     )
+    return np.concatenate([position, rotation.as_matrix()[:2, :].reshape(6)])

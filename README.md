@@ -104,15 +104,19 @@ lerobot-train \
   the world frame instead of the body frame. `state_compose` does both
   correctly; call it rather than reimplementing it.
 
-  **Do not decode the orientation vector with `viam.spatialmath` instead.**
-  `pose_rotation` follows Go rdk, which pins the longitude whenever
-  `1 - abs(o_z)` is within `1e-4` of either pole. rust-utils checks only
-  `1.0 - val`, so inside `1e-4` of *straight down* it disagrees with rdk — and
-  with this converter — by up to 63°. That band is reachable here: on the
-  workshop export, 296 of 35334 readings (0.84%) sit inside it, and every
-  reading is down-facing. `tests/test_pose_parity.py` pins agreement with the
-  SDK everywhere else and carries a strict-xfail canary for the band; when
-  that canary starts passing, upstream has fixed it and the warning can go.
+  **Decode with `pose_rotation`, not `viam.spatialmath`.** Both agree on every
+  reading in the workshop export, to 1e-15 degrees, so this is about staying
+  safe rather than fixing a live error. `pose_rotation` follows Go rdk, which
+  pins the longitude whenever `1 - abs(o_z)` is within `1e-4` of *either* pole;
+  rust-utils tests only `1.0 - val`, so within `1e-4` of straight down it keeps
+  a longitude rdk discards, and the two rotations then differ by exactly that
+  longitude. 296 of 35334 readings (0.84%) sit in that band, but all of them
+  have `o_y` at zero — the tool approaches vertical in the x-z plane — so their
+  longitude is 0 and nothing diverges. That is a property of this robot's
+  motion, not a guarantee: approach vertical from another azimuth and the error
+  grows to the full longitude. `tests/test_pose_parity.py` pins agreement
+  everywhere else and carries a strict-xfail canary for the band; when the
+  canary starts passing, upstream has fixed it and either decoder is fine.
 
 ### Camera keys
 
