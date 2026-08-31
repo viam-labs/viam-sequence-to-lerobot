@@ -19,10 +19,15 @@ example:
       --output-root ~/datasets/open-box-lerobot
 
 Each Viam sequence becomes one episode. The camera stream provides the frame
-clock; arm joint readings are matched to each frame by nearest timestamp.
-observation.state is the joint angles at each frame and action is the joint
-angles at the next frame. Camera frames are encoded as MP4 video. The result
-loads with LeRobotDataset and trains with lerobot-train as-is.
+clock; arm readings are matched to each frame by nearest timestamp. With
+--action-space joints (default), observation.state is the joint angles at each
+frame and action is the joint angles at the next frame. With --action-space
+delta-ee, observation.state is the absolute end-effector pose as [x,y,z] in mm
+plus the first two rows of its rotation matrix (9 dims), and action is the
+body-frame delta to the next frame's pose as [dx,dy,dz] in mm plus an
+axis-angle rotation in radians (6 dims). Camera frames are encoded as MP4
+video. The result loads with LeRobotDataset and trains with lerobot-train
+as-is.
 """
 
 
@@ -80,8 +85,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--arm",
         metavar="COMPONENT",
         default="xarm",
-        help="name of the Viam arm component whose JointPositions readings "
-        "become observation.state and action (default: %(default)s)",
+        help="name of the Viam arm component whose readings become "
+        "observation.state and action (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--action-space",
+        choices=("joints", "delta-ee"),
+        default="joints",
+        help="joints: state/action are JointPositions angles (action = next "
+        "frame's joints). delta-ee: state is the absolute EndPosition pose as "
+        "[x,y,z] plus two rotation-matrix rows (9 dims) and action is the "
+        "body-frame delta as [dx,dy,dz] plus an axis-angle rotation (6 dims); "
+        "at inference, compose the delta onto the live EndPosition and call "
+        "MoveToPosition (default: %(default)s)",
     )
     parser.add_argument(
         "--fps",
@@ -96,9 +112,9 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         metavar="SECONDS",
         default=0.05,
-        help="maximum clock offset allowed when matching a joint reading to a "
-        "camera frame; frames with no reading within this window are dropped "
-        "(default: %(default)s)",
+        help="maximum clock offset allowed when matching an arm reading or a "
+        "non-clock camera frame to a clock tick; ticks with no match within "
+        "this window are dropped (default: %(default)s)",
     )
     parser.add_argument(
         "--min-frames",
@@ -107,6 +123,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=10,
         help="skip sequences that yield fewer than N usable frames, e.g. "
         "aborted or accidental recordings (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--image-size",
+        type=int,
+        metavar="N",
+        default=None,
+        help="downscale camera frames so the longest side is N, keeping the "
+        "aspect ratio.",
     )
     parser.add_argument(
         "-v",
@@ -136,9 +160,11 @@ def main(argv: list[str] | None = None) -> int:
         task=args.task,
         camera_components=tuple(args.cameras) if args.cameras else ("webcam-teleop",),
         arm_component=args.arm,
+        action_space=args.action_space,
         fps=args.fps,
         tolerance_s=args.tolerance_s,
         min_frames=args.min_frames,
+        image_size=args.image_size,
     )
     try:
         summary = convert(config)

@@ -7,8 +7,9 @@ VLA policy (SmolVLA, pi0, ACT, ...).
 ## Before: capture and export from Viam
 
 1. **Capture** on your machine: each camera via `GetImages` and the arm via
-   `JointPositions`, all at the same rate (e.g. 10 Hz). One recorded
-   demonstration = one sequence.
+   `JointPositions` (plus `EndPosition` if you want `--action-space delta-ee`),
+   all at the same rate (e.g. 10 Hz). One recorded demonstration = one
+   sequence.
 2. **Create sequences** over each demonstration's time range (part, resources,
    start/end) and add them to a **sequence dataset**.
 3. **Export** it:
@@ -36,8 +37,21 @@ Semantics (run `--help` for all flags):
 - Each sequence becomes one episode; the **first** `--camera` defines the
   frame clock, and joint readings / other cameras are matched to it by nearest
   timestamp (`--tolerance-s`, default 50 ms).
-- `observation.state` = joint angles; `action` = joint angles at the next
-  frame (next-state-as-action). Viam-native units are kept (degrees).
+- `--action-space joints` (default): `observation.state` = joint angles;
+  `action` = joint angles at the next frame (next-state-as-action).
+  Viam-native units are kept (degrees).
+- `--action-space delta-ee`, from the arm's `EndPosition` readings.
+  `observation.state` is 9 dims: `[x, y, z]` in millimeters, then
+  `[r00, r01, r02, r10, r11, r12]` — the first two rows of the pose's 3×3
+  rotation matrix. `action` is 6 dims: `[dx, dy, dz]` in millimeters plus
+  `[drx, dry, drz]`, the body-frame rotation `R_t⁻¹·R_{t+1}` as an axis-angle
+  vector in radians. Sequences with no usable `EndPosition` are skipped, and so
+  is any frame whose delta would span a gap in the alignment.
+
+  Rotation takes six dims because no three-number encoding is continuous
+  everywhere, and this arm holds its tool within 0.03 rad of π — exactly where
+  an axis-angle state flips sign under smooth motion. Actions keep three
+  because a per-tick rotation is ~0.02 rad, far from that cut.
 - Sequences missing a listed camera and episodes shorter than `--min-frames`
   are skipped, with reasons logged.
 - Frames are encoded as MP4 video; the output loads with `LeRobotDataset`
@@ -63,9 +77,28 @@ lerobot-train \
   `camera1` anyway. Details in [Camera keys](#camera-keys) below.
 - Train on a CUDA GPU for real runs; at rollout, lower `n_action_steps`
   (e.g. 5–10) so the policy replans frequently.
-- The inference client must mirror the dataset contract: build the state from
-  `JointPositions` (degrees) exactly as captured, and send the policy's output
-  to `MoveToJointPositions` (degrees).
+- The inference client must mirror the dataset contract. For `joints`
+  datasets: build the state from `JointPositions` (degrees) exactly as
+  captured, and send the policy's output to `MoveToJointPositions` (degrees).
+  For `delta-ee` datasets, use or copy the helpers in
+  `viam_sequence_to_lerobot.pose` so the encoding cannot drift apart from the
+  converter's:
+
+  ```python
+  from viam_sequence_to_lerobot.pose import (
+      orientation_vector, pose_state, state_compose, state_rotation,
+  )
+
+  state = pose_state({"pose": pose_fields})        # live EndPosition -> 9 dims
+  delta = policy(state, images, task)              # 6 dims
+  target = state_compose(state, delta)             # 9 dims
+  arm.move_to_position(Pose(*target[:3], **orientation_vector(state_rotation(target))))
+  ```
+
+  Two ways to get this silently wrong: transposing the rotation (the state
+  holds matrix *rows*), and left-multiplying the delta, which applies it in the
+  world frame instead of the body frame. `state_compose` does both correctly;
+  call it rather than reimplementing it.
 
 ### Camera keys
 
