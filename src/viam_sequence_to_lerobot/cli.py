@@ -14,7 +14,6 @@ logger = logging.getLogger(__name__)
 EPILOG = """\
 example:
   viam-seq-to-lerobot ~/Downloads/workshop-2-sequences \\
-      --task-prefix "cmd:" \\
       --repo-id viam/open-box \\
       --output-root ~/datasets/open-box-lerobot
 
@@ -51,16 +50,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--task",
         metavar="TEXT",
         default=None,
-        help="fallback natural-language instruction for sequences that have no "
-        "--task-prefix tag, e.g. \"open the box\"; sequences with neither are skipped",
+        help='fallback natural-language instruction for sequences that have no '
+        'cmd: tag (see --task-prefix), e.g. "open the box"; sequences with '
+        'neither are skipped',
     )
     parser.add_argument(
         "--task-prefix",
         metavar="TEXT",
         default="cmd:",
         help="tag prefix that supplies each sequence's instruction, with the prefix "
-        "stripped: a sequence tagged \"cmd:open the box\" stores the task "
-        "\"open the box\" (default: %(default)s)",
+        'stripped: a sequence tagged "cmd:open the box" stores the task '
+        '"open the box" (default: %(default)s)',
     )
     parser.add_argument(
         "--output-root",

@@ -352,9 +352,10 @@ def test_sequence_task_falls_back_when_no_tag():
     assert sequence_task(_seq("session:x"), "cmd:", "open the box") == "open the box"
 
 
-def test_sequence_task_skips_when_no_tag_and_no_fallback():
+@pytest.mark.parametrize("fallback", [None, ""])
+def test_sequence_task_skips_when_no_tag_and_no_fallback(fallback):
     with pytest.raises(EpisodeSkip, match="no tag with prefix 'cmd:' and no --task fallback"):
-        sequence_task(_seq("session:x"), "cmd:", None)
+        sequence_task(_seq("session:x"), "cmd:", fallback)
 
 
 def test_sequence_task_prefix_only_tag_counts_as_absent():
@@ -371,14 +372,8 @@ def test_sequence_task_honors_custom_prefix():
     assert sequence_task(seq, "task:", None) == "open the lid"
 
 
-def test_config_task_is_optional_and_prefix_defaults(synthetic_export, tmp_path):
-    config = make_config(synthetic_export, tmp_path, task=None)
-    assert config.task is None
-    assert config.task_prefix == "cmd:"
-
-
 def test_config_rejects_empty_task_prefix(synthetic_export, tmp_path):
-    with pytest.raises(ValueError, match="task_prefix"):
+    with pytest.raises(ValueError, match="--task-prefix"):
         make_config(synthetic_export, tmp_path, task_prefix="")
 
 
@@ -410,7 +405,9 @@ def test_build_episode_skips_without_task(synthetic_export, tmp_path):
 
 def test_build_episode_reports_missing_task_before_missing_streams(synthetic_export, tmp_path):
     export = load_export(synthetic_export)
-    config = make_config(synthetic_export, tmp_path, task=None, arm_component="nope")
+    config = make_config(
+        synthetic_export, tmp_path, task=None, arm_component="nope", camera_components=("nope",)
+    )
     short = next(s for s in export.sequences if s.sequence_id == SHORT_SEQ)
     with pytest.raises(EpisodeSkip, match="no tag with prefix"):
         build_episode(export, short, config)

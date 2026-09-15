@@ -27,7 +27,6 @@ VLA policy (SmolVLA, pi0, ACT, ...).
 ```sh
 uv venv --python 3.11 && uv pip install -e .
 viam-seq-to-lerobot <export_dir> \
-    --task-prefix "cmd:" \
     --camera webcam-teleop --camera realsense-cam-teleop \
     --repo-id viam/open-box \
     --output-root ~/datasets/open-box-lerobot

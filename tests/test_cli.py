@@ -52,4 +52,4 @@ def test_empty_task_prefix_is_a_clean_error(synthetic_export, tmp_path, monkeypa
     monkeypatch.setattr("viam_sequence_to_lerobot.cli.convert", lambda config: ConversionSummary())
     rc = main([str(synthetic_export), "--task-prefix", ""])
     assert rc == 1
-    assert "task_prefix" in caplog.text
+    assert "--task-prefix" in caplog.text

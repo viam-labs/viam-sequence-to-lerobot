@@ -59,7 +59,7 @@ class ConversionConfig:
         if not self.camera_components:
             raise ValueError("At least one camera component is required")
         if not self.task_prefix:
-            raise ValueError("task_prefix must be non-empty; an empty prefix matches every tag")
+            raise ValueError("--task-prefix must be non-empty; an empty prefix matches every tag")
         if self.action_space not in ("joints", "delta-ee"):
             raise ValueError(
                 f"action_space must be 'joints' or 'delta-ee', got {self.action_space!r}"
@@ -179,7 +179,7 @@ def sequence_task(sequence: Sequence, prefix: str, fallback: str | None) -> str:
         raise EpisodeSkip(f"{len(values)} tags with prefix {prefix!r}, expected one")
     if values:
         return values[0]
-    if fallback is None:
+    if not fallback:
         raise EpisodeSkip(f"no tag with prefix {prefix!r} and no --task fallback")
     return fallback
 
