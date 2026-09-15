@@ -96,6 +96,7 @@ class EpisodeFrames:
 class ConversionSummary:
     episodes_written: int = 0
     frames_written: int = 0
+    tasks_written: set[str] = field(default_factory=set)
     skipped: list[tuple[str, str]] = field(default_factory=list)  # (sequence_id, reason)
 
     def skip(self, sequence_id: str, reason: str) -> None:
@@ -392,7 +393,7 @@ def convert(config: ConversionConfig) -> ConversionSummary:
                         {
                             "observation.state": episode.states[i],
                             "action": episode.actions[i],
-                            "task": config.task,
+                            "task": episode.task,
                             **frame_images,
                         }
                     )
@@ -412,6 +413,7 @@ def convert(config: ConversionConfig) -> ConversionSummary:
             dataset.save_episode()
             summary.episodes_written += 1
             summary.frames_written += n_added
+            summary.tasks_written.add(episode.task)
             logger.info(
                 "Saved episode %d/%d (%s): %d frames, tags=%s",
                 summary.episodes_written,
@@ -424,9 +426,10 @@ def convert(config: ConversionConfig) -> ConversionSummary:
         dataset.finalize()
 
     logger.info(
-        "Done: %d episodes / %d frames written to %s (%d sequences skipped)",
+        "Done: %d episodes / %d frames / %d distinct tasks written to %s (%d sequences skipped)",
         summary.episodes_written,
         summary.frames_written,
+        len(summary.tasks_written),
         config.output_root,
         len(summary.skipped),
     )

@@ -114,7 +114,8 @@ def test_convert_end_to_end(synthetic_export, tmp_path):
     assert frame["action"].shape == (N_JOINTS,)
     for key in ("observation.images.webcam_teleop", "observation.images.wrist_cam"):
         assert frame[key].shape[-2:] == (IMAGE_SIZE[1], IMAGE_SIZE[0])
-    assert frame["task"] == "open the box"
+    assert frame["task"] == "open the lid"
+    assert summary.tasks_written == {"open the lid"}
 
     # action[t] == state[t+1] survives the round trip.
     torch.testing.assert_close(frame["action"], dataset[1]["observation.state"])
