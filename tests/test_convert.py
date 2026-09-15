@@ -13,8 +13,9 @@ from viam_sequence_to_lerobot.convert import (
     _warn_rate_mismatches,
     build_episode,
     convert,
+    sequence_task,
 )
-from viam_sequence_to_lerobot.export_reader import load_export
+from viam_sequence_to_lerobot.export_reader import Sequence, load_export
 from viam_sequence_to_lerobot.pose import ACTION_NAMES, STATE_NAMES, state_compose
 
 from conftest import (
@@ -113,7 +114,8 @@ def test_convert_end_to_end(synthetic_export, tmp_path):
     assert frame["action"].shape == (N_JOINTS,)
     for key in ("observation.images.webcam_teleop", "observation.images.wrist_cam"):
         assert frame[key].shape[-2:] == (IMAGE_SIZE[1], IMAGE_SIZE[0])
-    assert frame["task"] == "open the box"
+    assert frame["task"] == "open the lid"
+    assert summary.tasks_written == {"open the lid"}
 
     # action[t] == state[t+1] survives the round trip.
     torch.testing.assert_close(frame["action"], dataset[1]["observation.state"])
@@ -332,3 +334,80 @@ def test_downscaled_size_keeps_even_sides_and_never_upscales():
 def test_image_size_rejects_non_positive(synthetic_export, tmp_path):
     with pytest.raises(ValueError, match="image_size must be positive"):
         make_config(synthetic_export, tmp_path, image_size=0)
+
+
+def _seq(*tags: str) -> Sequence:
+    return Sequence(sequence_id="seq", tags=tags, start_at=0.0, end_at=1.0)
+
+
+def test_sequence_task_strips_prefix():
+    assert sequence_task(_seq("session:x", "cmd:open the lid"), "cmd:", None) == "open the lid"
+
+
+def test_sequence_task_trims_whitespace():
+    assert sequence_task(_seq("cmd:  open the lid "), "cmd:", None) == "open the lid"
+
+
+def test_sequence_task_falls_back_when_no_tag():
+    assert sequence_task(_seq("session:x"), "cmd:", "open the box") == "open the box"
+
+
+@pytest.mark.parametrize("fallback", [None, ""])
+def test_sequence_task_skips_when_no_tag_and_no_fallback(fallback):
+    with pytest.raises(EpisodeSkip, match="no tag with prefix 'cmd:' and no --task fallback"):
+        sequence_task(_seq("session:x"), "cmd:", fallback)
+
+
+def test_sequence_task_prefix_only_tag_counts_as_absent():
+    assert sequence_task(_seq("cmd:", "cmd:   "), "cmd:", "fallback") == "fallback"
+
+
+def test_sequence_task_skips_on_multiple_tags():
+    with pytest.raises(EpisodeSkip, match="2 tags with prefix 'cmd:', expected one"):
+        sequence_task(_seq("cmd:a", "cmd:b"), "cmd:", "fallback")
+
+
+def test_sequence_task_honors_custom_prefix():
+    seq = _seq("cmd:ignored", "task:open the lid")
+    assert sequence_task(seq, "task:", None) == "open the lid"
+
+
+def test_config_rejects_empty_task_prefix(synthetic_export, tmp_path):
+    with pytest.raises(ValueError, match="--task-prefix"):
+        make_config(synthetic_export, tmp_path, task_prefix="")
+
+
+def test_sequence_task_ignores_blank_tag_beside_usable_one():
+    assert sequence_task(_seq("cmd:", "cmd:open the lid"), "cmd:", None) == "open the lid"
+
+
+def test_build_episode_task_from_tag(synthetic_export, tmp_path):
+    export = load_export(synthetic_export)
+    config = make_config(synthetic_export, tmp_path, task=None)
+    episode = build_episode(export, export.sequences[0], config)
+    assert episode.task == "open the lid"
+
+
+def test_build_episode_task_falls_back_to_config(synthetic_export, tmp_path):
+    export = load_export(synthetic_export)
+    config = make_config(synthetic_export, tmp_path, task="open the box")
+    short = next(s for s in export.sequences if s.sequence_id == SHORT_SEQ)
+    assert build_episode(export, short, config).task == "open the box"
+
+
+def test_build_episode_skips_without_task(synthetic_export, tmp_path):
+    export = load_export(synthetic_export)
+    config = make_config(synthetic_export, tmp_path, task=None)
+    short = next(s for s in export.sequences if s.sequence_id == SHORT_SEQ)
+    with pytest.raises(EpisodeSkip, match="no tag with prefix 'cmd:'"):
+        build_episode(export, short, config)
+
+
+def test_build_episode_reports_missing_task_before_missing_streams(synthetic_export, tmp_path):
+    export = load_export(synthetic_export)
+    config = make_config(
+        synthetic_export, tmp_path, task=None, arm_component="nope", camera_components=("nope",)
+    )
+    short = next(s for s in export.sequences if s.sequence_id == SHORT_SEQ)
+    with pytest.raises(EpisodeSkip, match="no tag with prefix"):
+        build_episode(export, short, config)

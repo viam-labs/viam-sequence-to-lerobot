@@ -14,20 +14,20 @@ logger = logging.getLogger(__name__)
 EPILOG = """\
 example:
   viam-seq-to-lerobot ~/Downloads/workshop-2-sequences \\
-      --task "open the box" \\
       --repo-id viam/open-box \\
       --output-root ~/datasets/open-box-lerobot
 
-Each Viam sequence becomes one episode. The camera stream provides the frame
-clock; arm readings are matched to each frame by nearest timestamp. With
---action-space joints (default), observation.state is the joint angles at each
-frame and action is the joint angles at the next frame. With --action-space
-delta-ee, observation.state is the absolute end-effector pose as [x,y,z] in mm
-plus the first two rows of its rotation matrix (9 dims), and action is the
-body-frame delta to the next frame's pose as [dx,dy,dz] in mm plus an
-axis-angle rotation in radians (6 dims). Camera frames are encoded as MP4
-video. The result loads with LeRobotDataset and trains with lerobot-train
-as-is.
+Each Viam sequence becomes one episode. Its task is the value of its
+--task-prefix tag (default cmd:), falling back to --task. The camera stream
+provides the frame clock; arm readings are matched to each frame by nearest
+timestamp. With --action-space joints (default), observation.state is the
+joint angles at each frame and action is the joint angles at the next frame.
+With --action-space delta-ee, observation.state is the absolute end-effector
+pose as [x,y,z] in mm plus the first two rows of its rotation matrix (9
+dims), and action is the body-frame delta to the next frame's pose as
+[dx,dy,dz] in mm plus an axis-angle rotation in radians (6 dims). Camera
+frames are encoded as MP4 video. The result loads with LeRobotDataset and
+trains with lerobot-train as-is.
 """
 
 
@@ -48,10 +48,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--task",
-        required=True,
         metavar="TEXT",
-        help='natural-language instruction stored with every frame and used to '
-        'condition the policy, e.g. "open the box"',
+        default=None,
+        help='fallback natural-language instruction for sequences that have no '
+        'cmd: tag (see --task-prefix), e.g. "open the box"; sequences with '
+        'neither are skipped',
+    )
+    parser.add_argument(
+        "--task-prefix",
+        metavar="TEXT",
+        default="cmd:",
+        help="tag prefix that supplies each sequence's instruction, with the prefix "
+        'stripped: a sequence tagged "cmd:open the box" stores the task '
+        '"open the box" (default: %(default)s)',
     )
     parser.add_argument(
         "--output-root",
@@ -153,20 +162,21 @@ def main(argv: list[str] | None = None) -> int:
     output_root = args.output_root or export_dir.with_name(export_dir.name + "-lerobot")
     repo_id = args.repo_id or f"viam/{export_dir.name}"
 
-    config = ConversionConfig(
-        export_dir=export_dir,
-        output_root=output_root,
-        repo_id=repo_id,
-        task=args.task,
-        camera_components=tuple(args.cameras) if args.cameras else ("webcam-teleop",),
-        arm_component=args.arm,
-        action_space=args.action_space,
-        fps=args.fps,
-        tolerance_s=args.tolerance_s,
-        min_frames=args.min_frames,
-        image_size=args.image_size,
-    )
     try:
+        config = ConversionConfig(
+            export_dir=export_dir,
+            output_root=output_root,
+            repo_id=repo_id,
+            task=args.task,
+            task_prefix=args.task_prefix,
+            camera_components=tuple(args.cameras) if args.cameras else ("webcam-teleop",),
+            arm_component=args.arm,
+            action_space=args.action_space,
+            fps=args.fps,
+            tolerance_s=args.tolerance_s,
+            min_frames=args.min_frames,
+            image_size=args.image_size,
+        )
         summary = convert(config)
     except (FileNotFoundError, NotADirectoryError, ValueError) as exc:
         logger.error("%s", exc)

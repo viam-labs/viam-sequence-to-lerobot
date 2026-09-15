@@ -45,7 +45,8 @@ class ConversionConfig:
     export_dir: Path
     output_root: Path
     repo_id: str
-    task: str
+    task: str | None = None  # fallback for sequences without a task tag
+    task_prefix: str = "cmd:"
     camera_components: tuple[str, ...] = ("webcam-teleop",)
     arm_component: str = "xarm"
     action_space: str = "joints"
@@ -57,6 +58,8 @@ class ConversionConfig:
     def __post_init__(self) -> None:
         if not self.camera_components:
             raise ValueError("At least one camera component is required")
+        if not self.task_prefix:
+            raise ValueError("--task-prefix must be non-empty; an empty prefix matches every tag")
         if self.action_space not in ("joints", "delta-ee"):
             raise ValueError(
                 f"action_space must be 'joints' or 'delta-ee', got {self.action_space!r}"
@@ -79,6 +82,7 @@ class EpisodeFrames:
     """Fully aligned per-tick data for one episode, ready to be written."""
 
     sequence: Sequence
+    task: str
     images: dict[str, list[Path]]  # camera component -> one path per frame
     states: np.ndarray  # (n_frames, state_dim) float32
     actions: np.ndarray  # (n_frames, action_dim) float32
@@ -92,6 +96,7 @@ class EpisodeFrames:
 class ConversionSummary:
     episodes_written: int = 0
     frames_written: int = 0
+    tasks_written: set[str] = field(default_factory=set)
     skipped: list[tuple[str, str]] = field(default_factory=list)  # (sequence_id, reason)
 
     def skip(self, sequence_id: str, reason: str) -> None:
@@ -158,15 +163,37 @@ def joint_names(n_joints: int) -> list[str]:
     return [f"joint_{i}" for i in range(n_joints)]
 
 
+def sequence_task(sequence: Sequence, prefix: str, fallback: str | None) -> str:
+    """Return the episode's task: the one ``prefix`` tag's value, else ``fallback``.
+
+    Raises:
+        EpisodeSkip: If there is no usable tag and no fallback, or more than
+            one tag carries the prefix.
+    """
+    values = [
+        tag[len(prefix) :].strip()
+        for tag in sequence.tags
+        if tag.startswith(prefix) and tag[len(prefix) :].strip()
+    ]
+    if len(values) > 1:
+        raise EpisodeSkip(f"{len(values)} tags with prefix {prefix!r}, expected one")
+    if values:
+        return values[0]
+    if not fallback:
+        raise EpisodeSkip(f"no tag with prefix {prefix!r} and no --task fallback")
+    return fallback
+
+
 def build_episode(
     export: SequenceExport, sequence: Sequence, config: ConversionConfig
 ) -> EpisodeFrames:
     """Align one sequence's streams onto the clock camera's ticks.
 
     Raises:
-        EpisodeSkip: If a required stream is missing or too little of the
-            sequence can be aligned.
+        EpisodeSkip: If the sequence has no resolvable task, a required
+            stream is missing, or too little of the sequence can be aligned.
     """
+    task = sequence_task(sequence, config.task_prefix, config.task)
     camera_rows = {
         name: export.binary_rows(sequence.sequence_id, name)
         for name in config.camera_components
@@ -237,7 +264,7 @@ def build_episode(
     for name in config.camera_components[1:]:
         images[name] = [aligned[name][i].path for i in frame_idx]
     return EpisodeFrames(
-        sequence=sequence, images=images, states=states, actions=actions
+        sequence=sequence, task=task, images=images, states=states, actions=actions
     )
 
 
@@ -366,7 +393,7 @@ def convert(config: ConversionConfig) -> ConversionSummary:
                         {
                             "observation.state": episode.states[i],
                             "action": episode.actions[i],
-                            "task": config.task,
+                            "task": episode.task,
                             **frame_images,
                         }
                     )
@@ -386,6 +413,7 @@ def convert(config: ConversionConfig) -> ConversionSummary:
             dataset.save_episode()
             summary.episodes_written += 1
             summary.frames_written += n_added
+            summary.tasks_written.add(episode.task)
             logger.info(
                 "Saved episode %d/%d (%s): %d frames, tags=%s",
                 summary.episodes_written,
@@ -398,9 +426,10 @@ def convert(config: ConversionConfig) -> ConversionSummary:
         dataset.finalize()
 
     logger.info(
-        "Done: %d episodes / %d frames written to %s (%d sequences skipped)",
+        "Done: %d episodes / %d frames / %d distinct tasks written to %s (%d sequences skipped)",
         summary.episodes_written,
         summary.frames_written,
+        len(summary.tasks_written),
         config.output_root,
         len(summary.skipped),
     )
