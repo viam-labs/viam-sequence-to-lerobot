@@ -12,7 +12,7 @@ def test_load_export_from_directory(synthetic_export):
     export = load_export(synthetic_export)
     assert [s.sequence_id for s in export.sequences] == [GOOD_SEQ, SHORT_SEQ]
     assert export.sequences[0].duration_s == 2.0
-    assert export.sequences[0].tags == ("session:test-good",)
+    assert export.sequences[0].tags == ("session:test-good", "cmd:open the lid")
 
     # The missing-file binary row is dropped; real files all resolve.
     camera_rows = export.binary_rows(GOOD_SEQ, CAMERA)
