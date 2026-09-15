@@ -11,7 +11,8 @@ VLA policy (SmolVLA, pi0, ACT, ...).
    all at the same rate (e.g. 10 Hz). One recorded demonstration = one
    sequence.
 2. **Create sequences** over each demonstration's time range (part, resources,
-   start/end) and add them to a **sequence dataset**.
+   start/end) and add them to a **sequence dataset**. Tag each sequence with
+   its instruction, e.g. `cmd:open the box`.
 3. **Export** it:
 
    ```sh
@@ -26,7 +27,7 @@ VLA policy (SmolVLA, pi0, ACT, ...).
 ```sh
 uv venv --python 3.11 && uv pip install -e .
 viam-seq-to-lerobot <export_dir> \
-    --task "open the box" \
+    --task-prefix "cmd:" \
     --camera webcam-teleop --camera realsense-cam-teleop \
     --repo-id viam/open-box \
     --output-root ~/datasets/open-box-lerobot
@@ -34,6 +35,11 @@ viam-seq-to-lerobot <export_dir> \
 
 Semantics (run `--help` for all flags):
 
+- Each episode's `task` is the value of the sequence's `cmd:` tag with the
+  prefix stripped (`cmd:open the box` → `"open the box"`; change the prefix
+  with `--task-prefix`). Sequences without one use `--task` if given and are
+  skipped otherwise, so one export holding several tasks converts into one
+  multi-task dataset. A sequence with more than one task tag is skipped.
 - Each sequence becomes one episode; the **first** `--camera` defines the
   frame clock, and joint readings / other cameras are matched to it by nearest
   timestamp (`--tolerance-s`, default 50 ms).
