@@ -45,7 +45,8 @@ class ConversionConfig:
     export_dir: Path
     output_root: Path
     repo_id: str
-    task: str
+    task: str | None = None  # fallback for sequences without a task tag
+    task_prefix: str = "cmd:"
     camera_components: tuple[str, ...] = ("webcam-teleop",)
     arm_component: str = "xarm"
     action_space: str = "joints"
@@ -57,6 +58,8 @@ class ConversionConfig:
     def __post_init__(self) -> None:
         if not self.camera_components:
             raise ValueError("At least one camera component is required")
+        if not self.task_prefix:
+            raise ValueError("task_prefix must be non-empty; an empty prefix matches every tag")
         if self.action_space not in ("joints", "delta-ee"):
             raise ValueError(
                 f"action_space must be 'joints' or 'delta-ee', got {self.action_space!r}"

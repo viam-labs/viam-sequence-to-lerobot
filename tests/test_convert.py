@@ -368,3 +368,14 @@ def test_sequence_task_skips_on_multiple_tags():
 def test_sequence_task_honors_custom_prefix():
     seq = _seq("cmd:ignored", "task:open the lid")
     assert sequence_task(seq, "task:", None) == "open the lid"
+
+
+def test_config_task_is_optional_and_prefix_defaults(synthetic_export, tmp_path):
+    config = make_config(synthetic_export, tmp_path, task=None)
+    assert config.task is None
+    assert config.task_prefix == "cmd:"
+
+
+def test_config_rejects_empty_task_prefix(synthetic_export, tmp_path):
+    with pytest.raises(ValueError, match="task_prefix"):
+        make_config(synthetic_export, tmp_path, task_prefix="")
