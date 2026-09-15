@@ -1,7 +1,7 @@
 """Synthetic Viam sequence export fixture.
 
 Builds a small export on disk with:
-- one "good" sequence: 16 camera ticks at 10 Hz, joint/pose readings ~1-2 ms
+- one "good" sequence tagged `cmd:open the lid`: 16 camera ticks at 10 Hz, joint/pose readings ~1-2 ms
   off each tick, except tick 7 which has no joint reading (alignment drop);
   a second "wrist-cam" camera covers every tick except tick 3,
 - one "short" sequence: 3 ticks and no wrist-cam (filtered by min_frames,
@@ -59,7 +59,7 @@ def synthetic_export(tmp_path: Path) -> Path:
 
     sequences = {
         "sequence_id": [GOOD_SEQ, SHORT_SEQ],
-        "tags": [["session:test-good"], ["session:test-short"]],
+        "tags": [["session:test-good", "cmd:open the lid"], ["session:test-short"]],
         "start_at": [BASE, BASE + timedelta(minutes=1)],
         "end_at": [BASE + timedelta(seconds=2), BASE + timedelta(minutes=1, seconds=1)],
     }

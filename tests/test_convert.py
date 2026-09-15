@@ -379,3 +379,29 @@ def test_config_task_is_optional_and_prefix_defaults(synthetic_export, tmp_path)
 def test_config_rejects_empty_task_prefix(synthetic_export, tmp_path):
     with pytest.raises(ValueError, match="task_prefix"):
         make_config(synthetic_export, tmp_path, task_prefix="")
+
+
+def test_sequence_task_ignores_blank_tag_beside_usable_one():
+    assert sequence_task(_seq("cmd:", "cmd:open the lid"), "cmd:", None) == "open the lid"
+
+
+def test_build_episode_task_from_tag(synthetic_export, tmp_path):
+    export = load_export(synthetic_export)
+    config = make_config(synthetic_export, tmp_path, task=None)
+    episode = build_episode(export, export.sequences[0], config)
+    assert episode.task == "open the lid"
+
+
+def test_build_episode_task_falls_back_to_config(synthetic_export, tmp_path):
+    export = load_export(synthetic_export)
+    config = make_config(synthetic_export, tmp_path, task="open the box")
+    short = next(s for s in export.sequences if s.sequence_id == SHORT_SEQ)
+    assert build_episode(export, short, config).task == "open the box"
+
+
+def test_build_episode_skips_without_task(synthetic_export, tmp_path):
+    export = load_export(synthetic_export)
+    config = make_config(synthetic_export, tmp_path, task=None)
+    short = next(s for s in export.sequences if s.sequence_id == SHORT_SEQ)
+    with pytest.raises(EpisodeSkip, match="no tag with prefix 'cmd:'"):
+        build_episode(export, short, config)

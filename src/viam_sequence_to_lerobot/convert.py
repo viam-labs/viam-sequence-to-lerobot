@@ -82,6 +82,7 @@ class EpisodeFrames:
     """Fully aligned per-tick data for one episode, ready to be written."""
 
     sequence: Sequence
+    task: str
     images: dict[str, list[Path]]  # camera component -> one path per frame
     states: np.ndarray  # (n_frames, state_dim) float32
     actions: np.ndarray  # (n_frames, action_dim) float32
@@ -188,9 +189,10 @@ def build_episode(
     """Align one sequence's streams onto the clock camera's ticks.
 
     Raises:
-        EpisodeSkip: If a required stream is missing or too little of the
-            sequence can be aligned.
+        EpisodeSkip: If the sequence has no resolvable task, a required
+            stream is missing, or too little of the sequence can be aligned.
     """
+    task = sequence_task(sequence, config.task_prefix, config.task)
     camera_rows = {
         name: export.binary_rows(sequence.sequence_id, name)
         for name in config.camera_components
@@ -261,7 +263,7 @@ def build_episode(
     for name in config.camera_components[1:]:
         images[name] = [aligned[name][i].path for i in frame_idx]
     return EpisodeFrames(
-        sequence=sequence, images=images, states=states, actions=actions
+        sequence=sequence, task=task, images=images, states=states, actions=actions
     )
 
 
