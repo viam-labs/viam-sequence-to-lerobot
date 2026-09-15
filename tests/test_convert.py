@@ -13,8 +13,9 @@ from viam_sequence_to_lerobot.convert import (
     _warn_rate_mismatches,
     build_episode,
     convert,
+    sequence_task,
 )
-from viam_sequence_to_lerobot.export_reader import load_export
+from viam_sequence_to_lerobot.export_reader import Sequence, load_export
 from viam_sequence_to_lerobot.pose import ACTION_NAMES, STATE_NAMES, state_compose
 
 from conftest import (
@@ -332,3 +333,38 @@ def test_downscaled_size_keeps_even_sides_and_never_upscales():
 def test_image_size_rejects_non_positive(synthetic_export, tmp_path):
     with pytest.raises(ValueError, match="image_size must be positive"):
         make_config(synthetic_export, tmp_path, image_size=0)
+
+
+def _seq(*tags: str) -> Sequence:
+    return Sequence(sequence_id="seq", tags=tags, start_at=0.0, end_at=1.0)
+
+
+def test_sequence_task_strips_prefix():
+    assert sequence_task(_seq("session:x", "cmd:open the lid"), "cmd:", None) == "open the lid"
+
+
+def test_sequence_task_trims_whitespace():
+    assert sequence_task(_seq("cmd:  open the lid "), "cmd:", None) == "open the lid"
+
+
+def test_sequence_task_falls_back_when_no_tag():
+    assert sequence_task(_seq("session:x"), "cmd:", "open the box") == "open the box"
+
+
+def test_sequence_task_skips_when_no_tag_and_no_fallback():
+    with pytest.raises(EpisodeSkip, match="no tag with prefix 'cmd:' and no --task fallback"):
+        sequence_task(_seq("session:x"), "cmd:", None)
+
+
+def test_sequence_task_prefix_only_tag_counts_as_absent():
+    assert sequence_task(_seq("cmd:", "cmd:   "), "cmd:", "fallback") == "fallback"
+
+
+def test_sequence_task_skips_on_multiple_tags():
+    with pytest.raises(EpisodeSkip, match="2 tags with prefix 'cmd:', expected one"):
+        sequence_task(_seq("cmd:a", "cmd:b"), "cmd:", "fallback")
+
+
+def test_sequence_task_honors_custom_prefix():
+    seq = _seq("cmd:ignored", "task:open the lid")
+    assert sequence_task(seq, "task:", None) == "open the lid"

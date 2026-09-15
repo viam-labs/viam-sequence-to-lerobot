@@ -158,6 +158,27 @@ def joint_names(n_joints: int) -> list[str]:
     return [f"joint_{i}" for i in range(n_joints)]
 
 
+def sequence_task(sequence: Sequence, prefix: str, fallback: str | None) -> str:
+    """Return the episode's task: the one ``prefix`` tag's value, else ``fallback``.
+
+    Raises:
+        EpisodeSkip: If there is no usable tag and no fallback, or more than
+            one tag carries the prefix.
+    """
+    values = [
+        tag[len(prefix) :].strip()
+        for tag in sequence.tags
+        if tag.startswith(prefix) and tag[len(prefix) :].strip()
+    ]
+    if len(values) > 1:
+        raise EpisodeSkip(f"{len(values)} tags with prefix {prefix!r}, expected one")
+    if values:
+        return values[0]
+    if fallback is None:
+        raise EpisodeSkip(f"no tag with prefix {prefix!r} and no --task fallback")
+    return fallback
+
+
 def build_episode(
     export: SequenceExport, sequence: Sequence, config: ConversionConfig
 ) -> EpisodeFrames:
