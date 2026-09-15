@@ -406,3 +406,11 @@ def test_build_episode_skips_without_task(synthetic_export, tmp_path):
     short = next(s for s in export.sequences if s.sequence_id == SHORT_SEQ)
     with pytest.raises(EpisodeSkip, match="no tag with prefix 'cmd:'"):
         build_episode(export, short, config)
+
+
+def test_build_episode_reports_missing_task_before_missing_streams(synthetic_export, tmp_path):
+    export = load_export(synthetic_export)
+    config = make_config(synthetic_export, tmp_path, task=None, arm_component="nope")
+    short = next(s for s in export.sequences if s.sequence_id == SHORT_SEQ)
+    with pytest.raises(EpisodeSkip, match="no tag with prefix"):
+        build_episode(export, short, config)
