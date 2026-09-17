@@ -19,7 +19,7 @@ def test_fresh_run_matches_hand_written_command():
     assert "--batch_size=64 --num_workers=12" in cmd
     assert "--save_checkpoint=true --save_freq=1250 --save_checkpoint_to_hub=true --steps=3750" in cmd
     assert "--policy.input_features=null" in cmd and "--rename_map" not in cmd
-    assert "--policy.n_action_steps=15" in cmd
+    assert "--policy.n_action_steps=30" in cmd
     assert "--resume" not in cmd
 
 
