@@ -60,7 +60,15 @@ Semantics (run `--help` for all flags):
 - Sequences missing a listed camera and episodes shorter than `--min-frames`
   are skipped, with reasons logged.
 - Frames are encoded as MP4 video; the output loads with `LeRobotDataset`
-  as-is.
+  as-is. `--vcodec auto` (default) uses a hardware encoder when the machine
+  has one (VideoToolbox on macOS, NVENC/VAAPI/QSV on Linux), which produces
+  H.264 and frees the CPU; otherwise, or with `--vcodec libsvtav1`, lerobot's
+  default AV1 encoder is used.
+- `--workers auto` (default) writes episodes in parallel processes and merges
+  the shards. It picks 1 for software codecs, which already thread across all
+  cores, and about a third of the cores for hardware codecs, where four
+  workers roughly halve the run on an M-series Mac. Pass `--workers N` to
+  override.
 
 ## After: fine-tune and deploy
 

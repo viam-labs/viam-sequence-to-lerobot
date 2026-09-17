@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Convert Viam sequence dataset exports to the LeRobot v3 dataset format for VLA fine-tuning"
 requires-python = ">=3.10"
 dependencies = [
-    "lerobot>=0.4",
+    "lerobot[dataset]>=0.4",
     "pillow>=10",
     "pyarrow>=14",
     "numpy>=1.24",

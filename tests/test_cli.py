@@ -53,3 +53,34 @@ def test_empty_task_prefix_is_a_clean_error(synthetic_export, tmp_path, monkeypa
     rc = main([str(synthetic_export), "--task-prefix", ""])
     assert rc == 1
     assert "--task-prefix" in caplog.text
+
+
+def test_vcodec_and_workers_default_to_auto(synthetic_export, tmp_path, monkeypatch):
+    config = run_main(synthetic_export, tmp_path, monkeypatch)
+    assert config.vcodec == "auto"
+    assert config.workers is None
+
+
+def test_vcodec_and_workers_flags(synthetic_export, tmp_path, monkeypatch):
+    config = run_main(synthetic_export, tmp_path, monkeypatch, "--vcodec", "libsvtav1", "--workers", "3")
+    assert config.vcodec == "libsvtav1"
+    assert config.workers == 3
+
+
+def test_importing_convert_leaves_root_logging_alone():
+    """lerobot installs a root handler on import, which would turn main()'s
+    basicConfig into a no-op and silence every INFO line; keep that import lazy."""
+    import subprocess
+    import sys
+
+    out = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import logging, viam_sequence_to_lerobot.convert; print(len(logging.getLogger().handlers))",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert out.stdout.strip() == "0"
