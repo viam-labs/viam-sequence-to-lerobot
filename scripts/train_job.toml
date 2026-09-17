@@ -13,6 +13,9 @@ timeout = "1h"
 
 [train]                     # lerobot-train flags; quoted keys keep the dots
 "policy.path" = "lerobot/smolvla_base"
+# Derive cameras from the dataset instead of inheriting smolvla_base's camera1/2/3 slots
+# (see README "Camera keys"). Must be the literal string null; TOML has no null.
+"policy.input_features" = "null"
 "policy.repo_id" = "viamrobotics/smolvla-box-bot-subtasks"
 "policy.use_amp" = true
 # LR schedule is in optimizer steps; scale with steps (defaults 1000/30000 assume batch 8)
@@ -26,7 +29,3 @@ save_freq = 1250              # 3 checkpoints over the run
 save_checkpoint_to_hub = true   # required for --resume: checkpoints land in policy.repo_id/checkpoints/<step>/
 # steps * batch_size = samples seen; raise steps when adding data (same 240K samples as 30000 steps at batch 8)
 steps = 3750
-
-[train.rename_map]
-"observation.images.webcam" = "observation.images.camera1"
-"observation.images.realsense_webcam" = "observation.images.camera2"

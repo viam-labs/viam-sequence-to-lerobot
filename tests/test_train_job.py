@@ -18,7 +18,7 @@ def test_fresh_run_matches_hand_written_command():
     assert "--policy.scheduler_warmup_steps=125 --policy.scheduler_decay_steps=3750" in cmd
     assert "--batch_size=64 --num_workers=12" in cmd
     assert "--save_checkpoint=true --save_freq=1250 --save_checkpoint_to_hub=true --steps=3750" in cmd
-    assert """'--rename_map={"observation.images.webcam": "observation.images.camera1", "observation.images.realsense_webcam": "observation.images.camera2"}'""" in cmd
+    assert "--policy.input_features=null" in cmd and "--rename_map" not in cmd
     assert "--resume" not in cmd
 
 
