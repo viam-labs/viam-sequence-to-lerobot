@@ -443,3 +443,94 @@ def test_convert_fails_loudly_when_encoder_drops_a_frame(synthetic_export, tmp_p
     with pytest.raises(RuntimeError, match="wrist_cam"):
         convert(config)
     assert dropped
+
+
+def test_blocking_encoder_waits_instead_of_dropping(tmp_path, monkeypatch):
+    """A slow encoder with a one-frame queue must still receive every frame."""
+    import time
+
+    import lerobot.datasets.compute_stats as compute_stats
+    from lerobot.datasets.video_utils import get_video_duration_in_s
+
+    from viam_sequence_to_lerobot.streaming import BlockingStreamingEncoder
+
+    # Called once per frame in the encoder thread; 250 ms is well past the
+    # 100 ms after which lerobot's stock encoder gives up and drops the frame.
+    slow = compute_stats.auto_downsample_height_width
+    monkeypatch.setattr(
+        compute_stats, "auto_downsample_height_width", lambda img: (time.sleep(0.25), slow(img))[1]
+    )
+    encoder = BlockingStreamingEncoder(fps=10, queue_maxsize=1)
+    key = "observation.images.cam"
+    encoder.start_episode([key], tmp_path)
+    for i in range(6):
+        encoder.feed_frame(key, np.full((24, 32, 3), i * 40, dtype=np.uint8))
+    path, _ = encoder.finish_episode()[key]
+    assert round(get_video_duration_in_s(path) * 10) == 6
+
+
+def test_convert_passes_vcodec_through(synthetic_export, tmp_path):
+    import json
+
+    config = make_config(synthetic_export, tmp_path, vcodec="libsvtav1")
+    convert(config)
+    info = json.loads((config.output_root / "meta" / "info.json").read_text())
+    assert info["features"]["observation.images.webcam_teleop"]["info"]["video.codec"] == "av1"
+
+
+def test_resolve_workers_auto_and_explicit():
+    from viam_sequence_to_lerobot.convert import resolve_workers
+
+    assert resolve_workers(None, "libsvtav1") == 1
+    assert resolve_workers(None, "h264_videotoolbox") >= 1
+    assert resolve_workers(3, "libsvtav1") == 3
+
+
+def test_config_rejects_non_positive_workers(synthetic_export, tmp_path):
+    with pytest.raises(ValueError, match="workers"):
+        make_config(synthetic_export, tmp_path, workers=0)
+
+
+def _with_cloned_good_sequence(export, monkeypatch, task):
+    """Add a copy of the good sequence under a new id so the export has 2 episodes."""
+    from dataclasses import replace
+
+    import viam_sequence_to_lerobot.convert as convert_module
+
+    good = export.sequences[0]
+    clone = replace(good, sequence_id="33333333-3333-3333-3333-333333333333", tags=(f"cmd:{task}",))
+    export.sequences.append(clone)
+    for table in (export.tabular_by_sequence, export.binary_by_sequence):
+        table[clone.sequence_id] = [replace(r, sequence_id=clone.sequence_id) for r in table[GOOD_SEQ]]
+    monkeypatch.setattr(convert_module, "load_export", lambda _dir: export)
+
+
+def test_convert_with_workers_writes_one_ordered_dataset(synthetic_export, tmp_path, monkeypatch):
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    _with_cloned_good_sequence(load_export(synthetic_export), monkeypatch, "close the lid")
+    config = make_config(
+        synthetic_export, tmp_path, camera_components=(CAMERA, WRIST_CAMERA), workers=2, vcodec="libsvtav1"
+    )
+    summary = convert(config)
+
+    n = GOOD_TICKS - 3
+    assert summary.episodes_written == 2
+    assert summary.frames_written == 2 * n
+    assert summary.tasks_written == {"open the lid", "close the lid"}
+    dataset = LeRobotDataset(repo_id=config.repo_id, root=config.output_root)
+    assert dataset.meta.total_episodes == 2
+    assert len(dataset) == 2 * n
+    assert dataset[0]["task"] == "open the lid"
+    assert dataset[n]["task"] == "close the lid"
+    assert dataset[n]["observation.images.wrist_cam"].shape[-2:] == (IMAGE_SIZE[1], IMAGE_SIZE[0])
+    assert not list(config.output_root.parent.glob(".*shard*")), "shard dirs must be cleaned up"
+
+
+def test_convert_refuses_existing_output_root(synthetic_export, tmp_path):
+    """Checked before any encoding: lerobot refuses the directory only at create time,
+    which in the sharded path is after every worker has finished."""
+    config = make_config(synthetic_export, tmp_path)
+    config.output_root.mkdir()
+    with pytest.raises(ValueError, match="already exists"):
+        convert(config)

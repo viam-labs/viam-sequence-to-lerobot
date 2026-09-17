@@ -23,6 +23,10 @@ across a gap would report several ticks of motion as one frame's worth.
 from __future__ import annotations
 
 import logging
+import multiprocessing
+import os
+import shutil
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -34,6 +38,9 @@ from .export_reader import Sequence, SequenceExport, load_export
 from .pose import ACTION_NAMES, STATE_NAMES, pose_state, state_delta
 
 logger = logging.getLogger(__name__)
+
+LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+LOG_DATEFMT = "%H:%M:%S"
 
 
 class EpisodeSkip(Exception):
@@ -54,6 +61,8 @@ class ConversionConfig:
     tolerance_s: float = 0.05
     min_frames: int = 10
     image_size: int | None = None
+    vcodec: str = "auto"  # lerobot codec name; "auto" prefers a hardware encoder
+    workers: int | None = None  # writer processes; None picks from the codec and core count
 
     def __post_init__(self) -> None:
         if not self.camera_components:
@@ -66,6 +75,8 @@ class ConversionConfig:
             )
         if self.image_size is not None and self.image_size < 1:
             raise ValueError(f"image_size must be positive, got {self.image_size}")
+        if self.workers is not None and self.workers < 1:
+            raise ValueError(f"workers must be positive, got {self.workers}")
 
     @property
     def clock_camera(self) -> str:
@@ -102,6 +113,12 @@ class ConversionSummary:
     def skip(self, sequence_id: str, reason: str) -> None:
         logger.warning("Skipping sequence %s: %s", sequence_id, reason)
         self.skipped.append((sequence_id, reason))
+
+    def merge(self, other: ConversionSummary) -> None:
+        self.episodes_written += other.episodes_written
+        self.frames_written += other.frames_written
+        self.tasks_written |= other.tasks_written
+        self.skipped.extend(other.skipped)
 
 
 # Fraction by which a stream's measured rate may differ from its reference
@@ -317,11 +334,7 @@ def _build_features(
 
 
 def _check_encoded_frames(dataset, n_added: int, config: ConversionConfig) -> None:
-    """Fail if the streaming encoder wrote fewer frames than were added.
-
-    lerobot's streaming encoder drops a frame when its queue is full, logging
-    a warning; a dropped frame would silently desynchronise video from state.
-    """
+    """Fail if the encoder wrote fewer frames than were added (backstop for drops)."""
     latest = dataset.meta.latest_episode
     for camera in config.camera_components:
         key = camera_feature_key(camera)
@@ -334,72 +347,54 @@ def _check_encoded_frames(dataset, n_added: int, config: ConversionConfig) -> No
             )
 
 
-def convert(config: ConversionConfig) -> ConversionSummary:
-    """Run the full conversion and return a summary of what was written."""
-    # Imported here so that reader/align stay usable without lerobot installed.
-    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+def resolve_workers(workers: int | None, vcodec: str) -> int:
+    """Explicit count, else 1 for software codecs and about a third of the cores for hardware ones.
 
-    export = load_export(config.export_dir)
+    One SVT-AV1 encoder already threads across every core, so extra workers only
+    contend for CPU. A hardware encoder frees the CPU; each worker then needs
+    roughly a core for JPEG decoding plus one per camera thread.
+    """
+    from lerobot.configs.video import HW_VIDEO_CODECS
+
+    if workers is not None:
+        return workers
+    if vcodec not in HW_VIDEO_CODECS:
+        return 1
+    # ponytail: calibrated on one 14-core M-series Mac, where the media engine
+    # saturates at ~4 workers; --workers N is the knob for other machines.
+    return max(1, (os.cpu_count() or 1) // 3)
+
+
+def _write_episodes(
+    episodes: list[EpisodeFrames],
+    features: dict,
+    image_shapes: dict[str, tuple[int, int, int]],
+    config: ConversionConfig,
+    vcodec: str,
+    root: Path,
+    repo_id: str,
+    log_level: int | None = None,
+) -> ConversionSummary:
+    """Write ``episodes`` as one LeRobot dataset at ``root``; runs in a worker when sharded.
+
+    ``vcodec`` must already be resolved (no ``"auto"``) so every shard encodes alike.
+    """
+    if log_level is not None:  # worker process: configure logging before lerobot is imported
+        logging.basicConfig(level=log_level, format=LOG_FORMAT, datefmt=LOG_DATEFMT)
+    from lerobot.configs.video import RGBEncoderConfig
+
+    from .streaming import BlockingDataset
+
     summary = ConversionSummary()
-
-    episodes: list[EpisodeFrames] = []
-    dims: tuple[int, int] | None = None
-    for sequence in export.sequences:
-        try:
-            episode = build_episode(export, sequence, config)
-        except EpisodeSkip as skip:
-            summary.skip(sequence.sequence_id, str(skip))
-            continue
-        if episode.n_frames < config.min_frames:
-            summary.skip(
-                sequence.sequence_id,
-                f"only {episode.n_frames} frames (min {config.min_frames})",
-            )
-            continue
-        episode_dims = (episode.states.shape[1], episode.actions.shape[1])
-        if dims is None:
-            dims = episode_dims
-        elif episode_dims != dims:
-            summary.skip(
-                sequence.sequence_id,
-                f"state/action dims {episode_dims} != {dims}",
-            )
-            continue
-        episodes.append(episode)
-
-    if not episodes:
-        raise ValueError("No convertible episodes found in the export")
-    assert dims is not None
-    state_dim, action_dim = dims
-    if config.action_space == "delta-ee":
-        state_names, action_names = STATE_NAMES, ACTION_NAMES
-    else:
-        state_names = action_names = joint_names(state_dim)
-
-    image_shapes = {
-        camera: _load_image(episodes[0].images[camera][0], config.image_size).shape
-        for camera in config.camera_components
-    }
-    logger.info(
-        "Converting %d episodes (%d frames total): state dim %d, action dim %d, cameras %s",
-        len(episodes),
-        sum(e.n_frames for e in episodes),
-        state_dim,
-        action_dim,
-        {c: "x".join(map(str, s)) for c, s in image_shapes.items()},
-    )
-
-    dataset = LeRobotDataset.create(
-        repo_id=config.repo_id,
+    dataset = BlockingDataset.create(
+        repo_id=repo_id,
         fps=config.fps,
-        features=_build_features(state_names, action_names, image_shapes),
-        root=config.output_root,
+        features=features,
+        root=root,
+        rgb_encoder=RGBEncoderConfig(vcodec=vcodec),
         # Feed frames straight to per-camera encoder threads instead of
         # staging every frame as a PNG and reading it back: ~4x faster.
         streaming_encoding=True,
-        # ponytail: the encoder drops frames (with only a warning) if its queue
-        # stays full for 100 ms; a deep queue makes that rare and the check
-        # after save_episode() makes it fatal rather than silent.
         encoder_queue_maxsize=64,
     )
     try:
@@ -450,6 +445,131 @@ def convert(config: ConversionConfig) -> ConversionSummary:
             )
     finally:
         dataset.finalize()
+    return summary
+
+
+def _write_sharded(
+    episodes: list[EpisodeFrames],
+    features: dict,
+    image_shapes: dict[str, tuple[int, int, int]],
+    config: ConversionConfig,
+    vcodec: str,
+    workers: int,
+) -> ConversionSummary:
+    """Write contiguous chunks of episodes in parallel processes, then merge the shards."""
+    from lerobot.datasets.aggregate import aggregate_datasets
+
+    config.output_root.parent.mkdir(parents=True, exist_ok=True)
+    shard_dir = Path(
+        tempfile.mkdtemp(prefix=f".{config.output_root.name}-shards-", dir=config.output_root.parent)
+    )
+    bounds = np.linspace(0, len(episodes), workers + 1).astype(int)
+    roots = [shard_dir / f"shard-{i}" for i in range(workers)]
+    repo_ids = [f"{config.repo_id}-shard-{i}" for i in range(workers)]
+    summary = ConversionSummary()
+    try:
+        log_level = logging.getLogger().getEffectiveLevel()
+        # Pool, not ProcessPoolExecutor: leaving the block terminates the other
+        # workers, so one shard's failure surfaces at once instead of after the rest finish.
+        with multiprocessing.get_context("spawn").Pool(workers) as pool:
+            pending = [
+                pool.apply_async(
+                    _write_episodes,
+                    (episodes[a:b], features, image_shapes, config, vcodec, root, rid, log_level),
+                )
+                for a, b, root, rid in zip(bounds, bounds[1:], roots, repo_ids)
+            ]
+            results = [r.get() for r in pending]
+        for r in results:
+            summary.merge(r)
+        kept = [i for i, r in enumerate(results) if r.episodes_written]
+        if kept:
+            logger.info("Merging %d shards into %s", len(kept), config.output_root)
+            aggregate_datasets(
+                [repo_ids[i] for i in kept],
+                config.repo_id,
+                roots=[roots[i] for i in kept],
+                aggr_root=config.output_root,
+            )
+    finally:
+        shutil.rmtree(shard_dir, ignore_errors=True)
+    return summary
+
+
+def convert(config: ConversionConfig) -> ConversionSummary:
+    """Run the full conversion and return a summary of what was written."""
+    export = load_export(config.export_dir)
+    summary = ConversionSummary()
+
+    episodes: list[EpisodeFrames] = []
+    dims: tuple[int, int] | None = None
+    for sequence in export.sequences:
+        try:
+            episode = build_episode(export, sequence, config)
+        except EpisodeSkip as skip:
+            summary.skip(sequence.sequence_id, str(skip))
+            continue
+        if episode.n_frames < config.min_frames:
+            summary.skip(
+                sequence.sequence_id,
+                f"only {episode.n_frames} frames (min {config.min_frames})",
+            )
+            continue
+        episode_dims = (episode.states.shape[1], episode.actions.shape[1])
+        if dims is None:
+            dims = episode_dims
+        elif episode_dims != dims:
+            summary.skip(
+                sequence.sequence_id,
+                f"state/action dims {episode_dims} != {dims}",
+            )
+            continue
+        episodes.append(episode)
+
+    if not episodes:
+        raise ValueError("No convertible episodes found in the export")
+    assert dims is not None
+    state_dim, action_dim = dims
+    if config.action_space == "delta-ee":
+        state_names, action_names = STATE_NAMES, ACTION_NAMES
+    else:
+        state_names = action_names = joint_names(state_dim)
+
+    image_shapes = {
+        camera: _load_image(episodes[0].images[camera][0], config.image_size).shape
+        for camera in config.camera_components
+    }
+    features = _build_features(state_names, action_names, image_shapes)
+    # Imported here: see streaming.py for why lerobot must not load before logging is set up.
+    from lerobot.configs.video import RGBEncoderConfig
+
+    encoder = RGBEncoderConfig(vcodec=config.vcodec)  # resolves "auto" to a concrete codec
+    workers = min(resolve_workers(config.workers, encoder.vcodec), len(episodes))
+    logger.info(
+        "Converting %d episodes (%d frames total): state dim %d, action dim %d, cameras %s, "
+        "codec %s, %d worker(s)",
+        len(episodes),
+        sum(e.n_frames for e in episodes),
+        state_dim,
+        action_dim,
+        {c: "x".join(map(str, s)) for c, s in image_shapes.items()},
+        encoder.vcodec,
+        workers,
+    )
+
+    if config.output_root.exists():
+        # lerobot refuses an existing root only at create time, which for the
+        # sharded path would be after every worker has finished encoding.
+        raise ValueError(f"Output directory already exists: {config.output_root}")
+    if workers == 1:
+        written = _write_episodes(
+            episodes, features, image_shapes, config, encoder.vcodec, config.output_root, config.repo_id
+        )
+    else:
+        written = _write_sharded(episodes, features, image_shapes, config, encoder.vcodec, workers)
+    summary.merge(written)
+    if not summary.episodes_written:
+        raise ValueError("No episodes were written: every frame was rejected")
 
     logger.info(
         "Done: %d episodes / %d frames / %d distinct tasks written to %s (%d sequences skipped)",

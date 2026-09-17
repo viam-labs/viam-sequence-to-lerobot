@@ -7,7 +7,7 @@ import logging
 import sys
 from pathlib import Path
 
-from .convert import ConversionConfig, convert
+from .convert import LOG_DATEFMT, LOG_FORMAT, ConversionConfig, convert
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +29,15 @@ dims), and action is the body-frame delta to the next frame's pose as
 frames are encoded as MP4 video. The result loads with LeRobotDataset and
 trains with lerobot-train as-is.
 """
+
+
+def _parse_workers(value: str) -> int | None:
+    if value == "auto":
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected an integer or 'auto', got {value!r}") from None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -142,6 +151,24 @@ def build_parser() -> argparse.ArgumentParser:
         "aspect ratio.",
     )
     parser.add_argument(
+        "--vcodec",
+        metavar="CODEC",
+        default="auto",
+        help="video codec for camera streams: auto uses a hardware encoder when "
+        "one is available (VideoToolbox on macOS, NVENC/VAAPI/QSV on Linux) and "
+        "libsvtav1 otherwise; or name one of libsvtav1, h264, hevc, libaom-av1 "
+        "(default: %(default)s)",
+    )
+    parser.add_argument(
+        "--workers",
+        metavar="N|auto",
+        type=_parse_workers,
+        default=None,
+        help="episode writer processes. auto (default) uses 1 for software codecs, "
+        "which already thread across all cores, and about a third of the cores "
+        "for hardware codecs",
+    )
+    parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -154,8 +181,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
+        format=LOG_FORMAT,
+        datefmt=LOG_DATEFMT,
     )
 
     export_dir = args.export_dir.expanduser().resolve()
@@ -176,6 +203,8 @@ def main(argv: list[str] | None = None) -> int:
             tolerance_s=args.tolerance_s,
             min_frames=args.min_frames,
             image_size=args.image_size,
+            vcodec=args.vcodec,
+            workers=args.workers,
         )
         summary = convert(config)
     except (FileNotFoundError, NotADirectoryError, ValueError) as exc:
