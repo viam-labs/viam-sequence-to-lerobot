@@ -15,6 +15,9 @@ timeout = "1h"
 "policy.path" = "lerobot/smolvla_base"
 "policy.repo_id" = "viamrobotics/smolvla-box-bot-subtasks"
 "policy.use_amp" = true
+# LR schedule is in optimizer steps; scale with steps (defaults 1000/30000 assume batch 8)
+"policy.scheduler_warmup_steps" = 125
+"policy.scheduler_decay_steps" = 3750
 "dataset.repo_id" = "viamrobotics/box-opener-subtasks"
 batch_size = 64
 num_workers = 12

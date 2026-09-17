@@ -15,6 +15,7 @@ def test_fresh_run_matches_hand_written_command():
     assert cmd.startswith("hf jobs run --namespace viamrobotics --flavor a100-large --secrets HF_TOKEN --detach --timeout 1h huggingface/lerobot-gpu lerobot-train ")
     assert "--policy.path=lerobot/smolvla_base" in cmd
     assert "--policy.use_amp=true" in cmd
+    assert "--policy.scheduler_warmup_steps=125 --policy.scheduler_decay_steps=3750" in cmd
     assert "--batch_size=64 --num_workers=12" in cmd
     assert "--save_checkpoint=true --save_freq=1250 --save_checkpoint_to_hub=true --steps=3750" in cmd
     assert """'--rename_map={"observation.images.webcam": "observation.images.camera1", "observation.images.realsense_webcam": "observation.images.camera2"}'""" in cmd
