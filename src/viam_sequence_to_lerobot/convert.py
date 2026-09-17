@@ -316,6 +316,24 @@ def _build_features(
     return features
 
 
+def _check_encoded_frames(dataset, n_added: int, config: ConversionConfig) -> None:
+    """Fail if the streaming encoder wrote fewer frames than were added.
+
+    lerobot's streaming encoder drops a frame when its queue is full, logging
+    a warning; a dropped frame would silently desynchronise video from state.
+    """
+    latest = dataset.meta.latest_episode
+    for camera in config.camera_components:
+        key = camera_feature_key(camera)
+        duration = latest[f"videos/{key}/to_timestamp"][0] - latest[f"videos/{key}/from_timestamp"][0]
+        n_encoded = round(duration * config.fps)
+        if n_encoded != n_added:
+            raise RuntimeError(
+                f"{key}: encoded {n_encoded} frames but {n_added} were added; "
+                "the video encoder dropped frames, so the dataset is corrupt"
+            )
+
+
 def convert(config: ConversionConfig) -> ConversionSummary:
     """Run the full conversion and return a summary of what was written."""
     # Imported here so that reader/align stay usable without lerobot installed.
@@ -376,6 +394,13 @@ def convert(config: ConversionConfig) -> ConversionSummary:
         fps=config.fps,
         features=_build_features(state_names, action_names, image_shapes),
         root=config.output_root,
+        # Feed frames straight to per-camera encoder threads instead of
+        # staging every frame as a PNG and reading it back: ~4x faster.
+        streaming_encoding=True,
+        # ponytail: the encoder drops frames (with only a warning) if its queue
+        # stays full for 100 ms; a deep queue makes that rare and the check
+        # after save_episode() makes it fatal rather than silent.
+        encoder_queue_maxsize=64,
     )
     try:
         for idx, episode in enumerate(episodes):
@@ -411,6 +436,7 @@ def convert(config: ConversionConfig) -> ConversionSummary:
                 summary.skip(episode.sequence.sequence_id, "all frames rejected")
                 continue
             dataset.save_episode()
+            _check_encoded_frames(dataset, n_added, config)
             summary.episodes_written += 1
             summary.frames_written += n_added
             summary.tasks_written.add(episode.task)

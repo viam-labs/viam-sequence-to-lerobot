@@ -411,3 +411,35 @@ def test_build_episode_reports_missing_task_before_missing_streams(synthetic_exp
     short = next(s for s in export.sequences if s.sequence_id == SHORT_SEQ)
     with pytest.raises(EpisodeSkip, match="no tag with prefix"):
         build_episode(export, short, config)
+
+
+def test_convert_streams_frames_to_the_encoder(synthetic_export, tmp_path, monkeypatch):
+    """Frames go straight to the video encoder; no PNG staging round trip."""
+    import lerobot.datasets.dataset_writer as writer
+
+    def no_staging(*args, **kwargs):
+        raise AssertionError("frame was staged as an image file")
+
+    monkeypatch.setattr(writer, "write_image", no_staging)
+    config = make_config(synthetic_export, tmp_path, camera_components=(CAMERA, WRIST_CAMERA))
+    summary = convert(config)
+    assert summary.frames_written == GOOD_TICKS - 3
+
+
+def test_convert_fails_loudly_when_encoder_drops_a_frame(synthetic_export, tmp_path, monkeypatch):
+    from lerobot.datasets.video_utils import StreamingVideoEncoder
+
+    real_feed = StreamingVideoEncoder.feed_frame
+    dropped = []
+
+    def lossy_feed(self, video_key, image):
+        if video_key.endswith("wrist_cam") and not dropped:
+            dropped.append(video_key)  # the encoder queue was full: frame silently lost
+            return
+        real_feed(self, video_key, image)
+
+    monkeypatch.setattr(StreamingVideoEncoder, "feed_frame", lossy_feed)
+    config = make_config(synthetic_export, tmp_path, camera_components=(CAMERA, WRIST_CAMERA))
+    with pytest.raises(RuntimeError, match="wrist_cam"):
+        convert(config)
+    assert dropped
