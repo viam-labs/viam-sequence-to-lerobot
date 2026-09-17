@@ -16,6 +16,8 @@ timeout = "1h"
 # Derive cameras from the dataset instead of inheriting smolvla_base's camera1/2/3 slots
 # (see README "Camera keys"). Must be the literal string null; TOML has no null.
 "policy.input_features" = "null"
+# Actions executed per inference call (<= chunk_size 50). Inference-time only; recorded in config.json.
+"policy.n_action_steps" = 15
 "policy.repo_id" = "viamrobotics/smolvla-box-bot-subtasks"
 "policy.use_amp" = true
 # LR schedule is in optimizer steps; scale with steps (defaults 1000/30000 assume batch 8)
