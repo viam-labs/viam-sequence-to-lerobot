@@ -7,7 +7,8 @@ image = "huggingface/lerobot-gpu"   # pin a tag for reproducible runs
 secrets = ["HF_TOKEN"]
 detach = true
 # 240K-sample run takes ~30 min on a100-large at batch 64; a job killed by
-# timeout is marked ERROR even if the checkpoint push already succeeded.
+# timeout is marked ERROR even if the checkpoint push already succeeded. Single unit only
+# ("90m", not "1h30m"): hf rejects compound durations.
 timeout = "1h"
 # name = "smolvla-box-bot"
 
