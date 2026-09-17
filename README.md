@@ -119,6 +119,23 @@ scripts/train_job.py my-run.toml --dry-run       # print the command only
 pushes `checkpoints/<step>/` into `policy.repo_id`, and the resumed pod pulls
 the highest step from there and continues (pass `--steps=N` to extend the run).
 
+**Hardware notes** (measured on the box-opener dataset, 240K samples):
+
+| Flavor | Batch | AMP | Samples/s | GPU mem | Cost |
+|---|---|---|---|---|---|
+| a100-large | 8 | no | 51 | - | $3.45, 83 min |
+| a10g-small | 8 | no | 35 | 3.4 GB | $1.89, 114 min |
+| a10g-small | 32 | yes | 49 | 8.6 GB | $1.36, 82 min |
+| a10g-large | 32 | yes | 49 | 8.6 GB | $2.04, 82 min |
+| a100-large | 64 | yes | 135 | 16.0 GB | $1.23, ~30 min |
+
+Batch size is bounded by GPU VRAM, not by flavor: batch 64 uses 16 GB of the
+A100's 80 GB, while both A10G flavors share the same 24 GB card, so
+`a10g-large`'s extra RAM/vCPUs don't buy a larger batch. `policy.use_amp=true`
+plus a large batch is what makes the A100 pay off — at batch 8 fp32 the GPU
+sat dataloader-starved. When the dataset grows, re-measure with a quick
+500-step probe (`--steps=500 --save_checkpoint=false --policy.push_to_hub=false`).
+
 ### Camera keys
 
 `smolvla_base` declares three image features (`observation.images.camera1/2/3`),

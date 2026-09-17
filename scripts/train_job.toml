@@ -6,17 +6,23 @@ flavor = "a100-large"
 image = "huggingface/lerobot-gpu"   # pin a tag for reproducible runs
 secrets = ["HF_TOKEN"]
 detach = true
-# timeout = "2d"
+# 240K-sample run takes ~30 min on a100-large at batch 64; a job killed by
+# timeout is marked ERROR even if the checkpoint push already succeeded.
+timeout = "1h"
 # name = "smolvla-box-bot"
 
 [train]                     # lerobot-train flags; quoted keys keep the dots
 "policy.path" = "lerobot/smolvla_base"
 "policy.repo_id" = "viamrobotics/smolvla-box-bot-subtasks"
+"policy.use_amp" = true
 "dataset.repo_id" = "viamrobotics/box-opener-subtasks"
+batch_size = 64
+num_workers = 12
 save_checkpoint = true
-save_freq = 5000
+save_freq = 1250              # 3 checkpoints over the run
 save_checkpoint_to_hub = true   # required for --resume: checkpoints land in policy.repo_id/checkpoints/<step>/
-steps = 30000
+# steps * batch_size = samples seen; raise steps when adding data (same 240K samples as 30000 steps at batch 8)
+steps = 3750
 
 [train.rename_map]
 "observation.images.webcam" = "observation.images.camera1"
