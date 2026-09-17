@@ -1,0 +1,23 @@
+# Settings for scripts/train_job.py. Copy this file per experiment.
+
+[job]                       # hf jobs run flags (any key becomes --key)
+namespace = "viamrobotics"
+flavor = "a100-large"
+image = "huggingface/lerobot-gpu"   # pin a tag for reproducible runs
+secrets = ["HF_TOKEN"]
+detach = true
+# timeout = "2d"
+# name = "smolvla-box-bot"
+
+[train]                     # lerobot-train flags; quoted keys keep the dots
+"policy.path" = "lerobot/smolvla_base"
+"policy.repo_id" = "viamrobotics/smolvla-box-bot-subtasks"
+"dataset.repo_id" = "viamrobotics/box-opener-subtasks"
+save_checkpoint = true
+save_freq = 5000
+save_checkpoint_to_hub = true   # required for --resume: checkpoints land in policy.repo_id/checkpoints/<step>/
+steps = 30000
+
+[train.rename_map]
+"observation.images.webcam" = "observation.images.camera1"
+"observation.images.realsense_webcam" = "observation.images.camera2"

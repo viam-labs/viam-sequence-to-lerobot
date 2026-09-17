@@ -100,6 +100,25 @@ lerobot-train \
   world frame instead of the body frame. `state_compose` does both correctly;
   call it rather than reimplementing it.
 
+### Training on HF Jobs
+
+`scripts/train_job.py` submits the same command to
+[HF Jobs](https://huggingface.co/docs/huggingface_hub/guides/jobs) so the flags
+live in a TOML file instead of your shell history. Copy
+`scripts/train_job.toml` per experiment; `[job]` keys become `hf jobs run`
+flags and `[train]` keys become `lerobot-train` flags.
+
+```sh
+scripts/train_job.py my-run.toml                 # fresh run
+scripts/train_job.py my-run.toml --steps=50000   # any --key=value overrides the file
+scripts/train_job.py my-run.toml --resume        # continue from the latest Hub checkpoint
+scripts/train_job.py my-run.toml --dry-run       # print the command only
+```
+
+`--resume` needs `save_checkpoint_to_hub = true` on the original run: lerobot
+pushes `checkpoints/<step>/` into `policy.repo_id`, and the resumed pod pulls
+the highest step from there and continues (pass `--steps=N` to extend the run).
+
 ### Camera keys
 
 `smolvla_base` declares three image features (`observation.images.camera1/2/3`),
