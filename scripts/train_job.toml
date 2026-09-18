@@ -1,0 +1,34 @@
+# Settings for scripts/train_job.py. Copy this file per experiment.
+
+[job]                       # hf jobs run flags (any key becomes --key)
+namespace = "viamrobotics"
+flavor = "a100-large"
+image = "huggingface/lerobot-gpu"   # pin a tag for reproducible runs
+secrets = ["HF_TOKEN"]
+detach = true
+# 240K-sample run takes ~30 min on a100-large at batch 64; a job killed by
+# timeout is marked ERROR even if the checkpoint push already succeeded. Single unit only
+# ("90m", not "1h30m"): hf rejects compound durations.
+timeout = "1h"
+# name = "smolvla-box-bot"
+
+[train]                     # lerobot-train flags; quoted keys keep the dots
+"policy.path" = "lerobot/smolvla_base"
+# Derive cameras from the dataset instead of inheriting smolvla_base's camera1/2/3 slots
+# (see README "Camera keys"). Must be the literal string null; TOML has no null.
+"policy.input_features" = "null"
+# Actions executed per inference call (<= chunk_size 50). Inference-time only; recorded in config.json.
+"policy.n_action_steps" = 30
+"policy.repo_id" = "viamrobotics/smolvla-box-bot-subtasks"
+"policy.use_amp" = true
+# LR schedule is in optimizer steps; scale with steps (defaults 1000/30000 assume batch 8)
+"policy.scheduler_warmup_steps" = 125
+"policy.scheduler_decay_steps" = 3750
+"dataset.repo_id" = "viamrobotics/box-opener-subtasks"
+batch_size = 64
+num_workers = 12
+save_checkpoint = true
+save_freq = 1250              # 3 checkpoints over the run
+save_checkpoint_to_hub = true   # required for --resume: checkpoints land in policy.repo_id/checkpoints/<step>/
+# steps * batch_size = samples seen; raise steps when adding data (same 240K samples as 30000 steps at batch 8)
+steps = 3750
