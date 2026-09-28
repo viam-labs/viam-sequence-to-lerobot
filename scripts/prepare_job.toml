@@ -1,0 +1,29 @@
+# Settings for scripts/prepare_job.py: Viam export -> LeRobot conversion -> Hub push, on HF Jobs.
+
+[job]                       # hf jobs run flags (any key becomes --key)
+namespace = "viamrobotics"
+# T4 pods expose NVENC (probed 2026-09-28), so --vcodec auto picks h264_nvenc and the CPU
+# only decodes JPEGs. t4-medium's 8 vCPU feed 2 workers for $0.60/h; cpu-xl is the fallback.
+flavor = "t4-medium"
+image = "python:3.12"       # needs curl and git; -slim has neither
+# Bare names are read from your local environment (export VIAM_API_KEY_ID / VIAM_API_KEY).
+secrets = ["HF_TOKEN", "VIAM_API_KEY_ID", "VIAM_API_KEY"]
+detach = true
+timeout = "180m"            # single unit only; hf rejects compound durations like "2h30m"
+
+[prepare]
+ref = "main"                # git ref of this repo to install in the pod; push local changes first
+# Tag the Hub dataset's current v3.0 commit before the push moves v3.0. Delete to skip.
+archive_tag = "data-v2"
+
+[export]                    # viam dataset export flags
+"dataset-id" = "6aa954ab0ccd60006b98069e"
+"max-wait" = "1h"           # server-side parquet export; default 30m
+
+[convert]                   # viam-seq-to-lerobot flags; a list repeats the flag
+"repo-id" = "viamrobotics/box-opener-subtasks"
+camera = ["webcam", "realsense-webcam"]
+fps = 30
+# Explicit: in a container os.cpu_count() can report the host's cores, not the pod's 8,
+# and --workers auto would oversubscribe. ~3 vCPU per worker (JPEG decode + a thread per camera).
+workers = 2

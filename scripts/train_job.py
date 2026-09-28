@@ -31,8 +31,23 @@ def flag(key: str, value) -> list[str]:
     return [f"--{key}={value}"]
 
 
+def job_command(job: dict) -> list[str]:
+    """`hf jobs run <flags> <image>` from a [job] table; the caller appends the command."""
+    cmd = ["hf", "jobs", "run"]
+    for key, value in job.items():
+        if key == "image":
+            continue
+        if isinstance(value, bool):
+            cmd += [f"--{key}"] if value else []
+        elif isinstance(value, list):
+            for v in value:
+                cmd += [f"--{key}", str(v)]
+        else:
+            cmd += [f"--{key}", str(value)]
+    return cmd + [job["image"]]
+
+
 def build_command(cfg: dict, resume: str | None, overrides: list[str]) -> list[str]:
-    job = dict(cfg["job"])
     train = dict(cfg["train"])
     for tok in overrides:  # --key=value wins over the config file
         if not tok.startswith("--") or "=" not in tok:
@@ -48,18 +63,7 @@ def build_command(cfg: dict, resume: str | None, overrides: list[str]) -> list[s
         train.pop("policy.repo_id", None)
         train = {"resume": True, "config_path": source, **train}
 
-    cmd = ["hf", "jobs", "run"]
-    for key, value in job.items():
-        if key == "image":
-            continue
-        if isinstance(value, bool):
-            cmd += [f"--{key}"] if value else []
-        elif isinstance(value, list):
-            for v in value:
-                cmd += [f"--{key}", str(v)]
-        else:
-            cmd += [f"--{key}", str(value)]
-    cmd += [job["image"], "lerobot-train"]
+    cmd = job_command(cfg["job"]) + ["lerobot-train"]
     for key, value in train.items():
         cmd += flag(key, value)
     return cmd

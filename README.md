@@ -132,6 +132,23 @@ scripts/train_job.py my-run.toml --dry-run       # print the command only
 pushes `checkpoints/<step>/` into `policy.repo_id`, and the resumed pod pulls
 the highest step from there and continues (pass `--steps=N` to extend the run).
 
+### Preparing data on HF Jobs
+
+`scripts/prepare_job.py` runs the export, conversion and push in a pod, so the
+data goes Viam → Hub without crossing your connection. Settings live in
+`scripts/prepare_job.toml` (`[export]` and `[convert]` keys become CLI flags).
+
+```sh
+export VIAM_API_KEY_ID=... VIAM_API_KEY=...        # sent as job secrets
+scripts/prepare_job.py --dry-run                   # print the command only
+scripts/prepare_job.py --then-train my-run.toml    # prepare, then submit training from the pod
+```
+
+Before pushing, the pod tags the dataset's current `v3.0` commit as
+`archive_tag`, because the push moves `v3.0` and `LeRobotDataset` loads that
+tag. The pod installs this repo from GitHub at `ref`, so push local changes
+first.
+
 **Hardware notes** (measured on the box-opener dataset, 240K samples):
 
 | Flavor | Batch | AMP | Samples/s | GPU mem | Cost |
