@@ -546,7 +546,7 @@ LEADER = "leader-arm"
 LEADER_OFFSET = 100.0
 
 
-def _add_leader(export_dir, n_joints=N_JOINTS):
+def _add_leader(export_dir, n_joints=N_JOINTS, drop_tick=None):
     """Duplicate the follower's JointPositions rows as a leader arm, offset by LEADER_OFFSET."""
     path = export_dir / "tabular_data.parquet"
     table = pq.read_table(path)
@@ -554,6 +554,12 @@ def _add_leader(export_dir, n_joints=N_JOINTS):
         pc.equal(table["component_name"], ARM), pc.equal(table["method_name"], "JointPositions")
     )
     leader = table.filter(mask)
+    if drop_tick is not None:  # payload values encode the tick, so match on the first joint
+        keep = [
+            round(json.loads(p)["positions"]["values"][0]) != drop_tick
+            for p in leader["payload"].to_pylist()
+        ]
+        leader = leader.filter(pa.array(keep))
     payloads = [
         json.dumps(
             {
@@ -581,6 +587,16 @@ def test_build_episode_action_arm_uses_leader_readings(synthetic_export, tmp_pat
 
     # Tick 7 has no follower (or leader) reading; no tick is consumed for a next-state action.
     assert episode.n_frames == GOOD_TICKS - 1
+    np.testing.assert_allclose(episode.actions, episode.states + LEADER_OFFSET)
+
+
+def test_build_episode_action_arm_leader_gap_drops_frame(synthetic_export, tmp_path):
+    _add_leader(synthetic_export, drop_tick=4)
+    export = load_export(synthetic_export)
+    config = make_config(synthetic_export, tmp_path, action_arm=LEADER)
+    episode = build_episode(export, export.sequences[0], config)
+
+    assert episode.n_frames == GOOD_TICKS - 2
     np.testing.assert_allclose(episode.actions, episode.states + LEADER_OFFSET)
 
 

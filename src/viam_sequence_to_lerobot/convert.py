@@ -6,6 +6,8 @@ Mapping (Viam capture -> LeRobot feature):
 - ``action_space="joints"`` (default):
   arm ``JointPositions`` (N joints)  -> ``observation.state``;
   ``JointPositions`` at the next tick -> ``action`` (next-state-as-action)
+- ``action_space="joints"`` with ``action_arm``: that arm's ``JointPositions``
+  at the same tick -> ``action``; no tick is consumed
 - ``action_space="delta-ee"``:
   arm ``EndPosition`` as ``[x, y, z]`` plus the first two rotation-matrix rows
   (9 dims) -> ``observation.state``; body-frame delta to the next tick's pose,
@@ -14,8 +16,9 @@ Mapping (Viam capture -> LeRobot feature):
 Arm readings and the frames of every non-clock camera are matched to each
 clock tick by nearest timestamp within ``tolerance_s``; ticks that cannot be
 fully matched are dropped. Sequences missing any configured camera entirely
-are skipped. The last tick of each episode is consumed as the final action
-target and is not written as a frame. In ``delta-ee`` mode a frame whose delta
+are skipped. In next-state mode (no ``action_arm``) the last tick of each
+episode is consumed as the final action target and is not written as a frame.
+In ``delta-ee`` mode a frame whose delta
 would span one of those dropped ticks is dropped as well, since the delta
 across a gap would report several ticks of motion as one frame's worth.
 """
@@ -213,6 +216,8 @@ def build_episode(
     Raises:
         EpisodeSkip: If the sequence has no resolvable task, a required
             stream is missing, or too little of the sequence can be aligned.
+        ValueError: If action_arm's joint count differs from the arm's (a
+            config error, not skipped).
     """
     task = sequence_task(sequence, config.task_prefix, config.task)
     camera_rows = {
@@ -238,7 +243,7 @@ def build_episode(
         leader_rows = export.tabular_rows(sequence.sequence_id, config.action_arm, "JointPositions")
         if not leader_rows:
             raise EpisodeSkip(f"no JointPositions readings from action arm {config.action_arm!r}")
-        streams["action"] = [(r.timestamp, r) for r in leader_rows]
+        streams[config.action_arm] = [(r.timestamp, r) for r in leader_rows]
     for name in config.camera_components[1:]:
         streams[name] = [(r.timestamp, r) for r in camera_rows[name]]
 
@@ -289,7 +294,7 @@ def build_episode(
             actions = joints[1:]  # command for tick t is the measured joints at tick t+1
         else:
             leader = np.array(
-                [joint_values(r.payload) for r in aligned["action"]], dtype=np.float32
+                [joint_values(r.payload) for r in aligned[config.action_arm]], dtype=np.float32
             )
             if leader.shape[1] != joints.shape[1]:
                 # A config error, not a per-sequence one: raise past convert()'s
