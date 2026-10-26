@@ -27,6 +27,7 @@ import multiprocessing
 import os
 import shutil
 import tempfile
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -57,6 +58,7 @@ class ConversionConfig:
     camera_components: tuple[str, ...] = ("webcam-teleop",)
     arm_component: str = "xarm"
     action_space: str = "joints"
+    action_arm: str | None = None  # arm whose JointPositions at each tick is the action
     fps: int = 10
     tolerance_s: float = 0.05
     min_frames: int = 10
@@ -73,6 +75,8 @@ class ConversionConfig:
             raise ValueError(
                 f"action_space must be 'joints' or 'delta-ee', got {self.action_space!r}"
             )
+        if self.action_arm is not None and self.action_space != "joints":
+            raise ValueError("action_arm requires action_space='joints'")
         if self.image_size is not None and self.image_size < 1:
             raise ValueError(f"image_size must be positive, got {self.image_size}")
         if self.workers is not None and self.workers < 1:
@@ -230,6 +234,11 @@ def build_episode(
     streams: dict[str, list] = {
         arm_key: [(r.timestamp, r) for r in arm_rows],
     }
+    if config.action_arm is not None:
+        leader_rows = export.tabular_rows(sequence.sequence_id, config.action_arm, "JointPositions")
+        if not leader_rows:
+            raise EpisodeSkip(f"no JointPositions readings from action arm {config.action_arm!r}")
+        streams["action"] = [(r.timestamp, r) for r in leader_rows]
     for name in config.camera_components[1:]:
         streams[name] = [(r.timestamp, r) for r in camera_rows[name]]
 
@@ -274,9 +283,24 @@ def build_episode(
         ).astype(np.float32)
     else:
         joints = np.array([joint_values(r.payload) for r in aligned["joints"]], dtype=np.float32)
-        frame_idx = list(range(len(kept) - 1))
-        states = joints[:-1]
-        actions = joints[1:]  # command for tick t is the measured joints at tick t+1
+        if config.action_arm is None:
+            frame_idx = list(range(len(kept) - 1))
+            states = joints[:-1]
+            actions = joints[1:]  # command for tick t is the measured joints at tick t+1
+        else:
+            leader = np.array(
+                [joint_values(r.payload) for r in aligned["action"]], dtype=np.float32
+            )
+            if leader.shape[1] != joints.shape[1]:
+                # A config error, not a per-sequence one: raise past convert()'s
+                # EpisodeSkip handling before any dataset is written.
+                raise ValueError(
+                    f"action arm {config.action_arm!r} has {leader.shape[1]} joints but "
+                    f"arm {config.arm_component!r} has {joints.shape[1]}"
+                )
+            frame_idx = list(range(len(kept)))
+            states = joints
+            actions = leader  # the leader's position at tick t is the command at tick t
     images = {config.clock_camera: [clock_rows[kept[i]].path for i in frame_idx]}
     for name in config.camera_components[1:]:
         images[name] = [aligned[name][i].path for i in frame_idx]
@@ -527,7 +551,9 @@ def convert(config: ConversionConfig) -> ConversionSummary:
         episodes.append(episode)
 
     if not episodes:
-        raise ValueError("No convertible episodes found in the export")
+        reasons = Counter(reason for _, reason in summary.skipped)
+        detail = "; ".join(f"{n}× {reason}" for reason, n in reasons.most_common())
+        raise ValueError(f"No convertible episodes found in the export ({detail or 'no sequences'})")
     assert dims is not None
     state_dim, action_dim = dims
     if config.action_space == "delta-ee":
