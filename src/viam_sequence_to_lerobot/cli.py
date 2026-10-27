@@ -118,6 +118,14 @@ def build_parser() -> argparse.ArgumentParser:
         "MoveToPosition (default: %(default)s)",
     )
     parser.add_argument(
+        "--action-arm",
+        metavar="COMPONENT",
+        default=None,
+        help="arm component (e.g. a teleop leader) whose JointPositions at each frame "
+        "becomes the action, instead of the --arm's next-frame joints; must have the "
+        "same joint count as --arm; joints action space only",
+    )
+    parser.add_argument(
         "--fps",
         type=int,
         default=10,
@@ -199,6 +207,7 @@ def main(argv: list[str] | None = None) -> int:
             camera_components=tuple(args.cameras) if args.cameras else ("webcam-teleop",),
             arm_component=args.arm,
             action_space=args.action_space,
+            action_arm=args.action_arm,
             fps=args.fps,
             tolerance_s=args.tolerance_s,
             min_frames=args.min_frames,
