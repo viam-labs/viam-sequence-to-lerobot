@@ -37,7 +37,7 @@ def test_action_space_delta_ee(synthetic_export, tmp_path, monkeypatch):
 def test_task_is_optional_and_prefix_defaults(synthetic_export, tmp_path, monkeypatch):
     config = run_main(synthetic_export, tmp_path, monkeypatch)
     assert config.task is None
-    assert config.task_prefix == "cmd:"
+    assert config.task_prefixes == ("cmd:", "task:")
 
 
 def test_task_and_prefix_flags(synthetic_export, tmp_path, monkeypatch):
@@ -45,7 +45,7 @@ def test_task_and_prefix_flags(synthetic_export, tmp_path, monkeypatch):
         synthetic_export, tmp_path, monkeypatch, "--task", "open the box", "--task-prefix", "task:"
     )
     assert config.task == "open the box"
-    assert config.task_prefix == "task:"
+    assert config.task_prefixes == ("task:",)
 
 
 def test_empty_task_prefix_is_a_clean_error(synthetic_export, tmp_path, monkeypatch, caplog):

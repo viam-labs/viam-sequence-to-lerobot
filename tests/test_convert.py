@@ -341,44 +341,55 @@ def _seq(*tags: str) -> Sequence:
 
 
 def test_sequence_task_strips_prefix():
-    assert sequence_task(_seq("session:x", "cmd:open the lid"), "cmd:", None) == "open the lid"
+    assert sequence_task(_seq("session:x", "cmd:open the lid"), ("cmd:",), None) == "open the lid"
 
 
 def test_sequence_task_trims_whitespace():
-    assert sequence_task(_seq("cmd:  open the lid "), "cmd:", None) == "open the lid"
+    assert sequence_task(_seq("cmd:  open the lid "), ("cmd:",), None) == "open the lid"
 
 
 def test_sequence_task_falls_back_when_no_tag():
-    assert sequence_task(_seq("session:x"), "cmd:", "open the box") == "open the box"
+    assert sequence_task(_seq("session:x"), ("cmd:",), "open the box") == "open the box"
 
 
 @pytest.mark.parametrize("fallback", [None, ""])
 def test_sequence_task_skips_when_no_tag_and_no_fallback(fallback):
     with pytest.raises(EpisodeSkip, match="no tag with prefix 'cmd:' and no --task fallback"):
-        sequence_task(_seq("session:x"), "cmd:", fallback)
+        sequence_task(_seq("session:x"), ("cmd:",), fallback)
 
 
 def test_sequence_task_prefix_only_tag_counts_as_absent():
-    assert sequence_task(_seq("cmd:", "cmd:   "), "cmd:", "fallback") == "fallback"
+    assert sequence_task(_seq("cmd:", "cmd:   "), ("cmd:",), "fallback") == "fallback"
 
 
 def test_sequence_task_skips_on_multiple_tags():
     with pytest.raises(EpisodeSkip, match="2 tags with prefix 'cmd:', expected one"):
-        sequence_task(_seq("cmd:a", "cmd:b"), "cmd:", "fallback")
+        sequence_task(_seq("cmd:a", "cmd:b"), ("cmd:",), "fallback")
 
 
 def test_sequence_task_honors_custom_prefix():
     seq = _seq("cmd:ignored", "task:open the lid")
-    assert sequence_task(seq, "task:", None) == "open the lid"
+    assert sequence_task(seq, ("task:",), None) == "open the lid"
 
 
 def test_config_rejects_empty_task_prefix(synthetic_export, tmp_path):
     with pytest.raises(ValueError, match="--task-prefix"):
-        make_config(synthetic_export, tmp_path, task_prefix="")
+        make_config(synthetic_export, tmp_path, task_prefixes=("",))
+
+
+def test_sequence_task_accepts_either_default_prefix():
+    prefixes = ("cmd:", "task:")
+    assert sequence_task(_seq("cmd:open the lid"), prefixes, None) == "open the lid"
+    assert sequence_task(_seq("task:open the lid"), prefixes, None) == "open the lid"
+
+
+def test_sequence_task_skips_on_cmd_and_task_tags_together():
+    with pytest.raises(EpisodeSkip, match="2 tags with prefix 'cmd:' or 'task:'"):
+        sequence_task(_seq("cmd:a", "task:b"), ("cmd:", "task:"), None)
 
 
 def test_sequence_task_ignores_blank_tag_beside_usable_one():
-    assert sequence_task(_seq("cmd:", "cmd:open the lid"), "cmd:", None) == "open the lid"
+    assert sequence_task(_seq("cmd:", "cmd:open the lid"), ("cmd:",), None) == "open the lid"
 
 
 def test_build_episode_task_from_tag(synthetic_export, tmp_path):

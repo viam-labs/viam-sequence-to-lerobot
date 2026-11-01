@@ -53,7 +53,7 @@ class ConversionConfig:
     output_root: Path
     repo_id: str
     task: str | None = None  # fallback for sequences without a task tag
-    task_prefix: str = "cmd:"
+    task_prefixes: tuple[str, ...] = ("cmd:", "task:")
     camera_components: tuple[str, ...] = ("webcam-teleop",)
     arm_component: str = "xarm"
     action_space: str = "joints"
@@ -67,7 +67,7 @@ class ConversionConfig:
     def __post_init__(self) -> None:
         if not self.camera_components:
             raise ValueError("At least one camera component is required")
-        if not self.task_prefix:
+        if not self.task_prefixes or not all(self.task_prefixes):
             raise ValueError("--task-prefix must be non-empty; an empty prefix matches every tag")
         if self.action_space not in ("joints", "delta-ee"):
             raise ValueError(
@@ -180,24 +180,27 @@ def joint_names(n_joints: int) -> list[str]:
     return [f"joint_{i}" for i in range(n_joints)]
 
 
-def sequence_task(sequence: Sequence, prefix: str, fallback: str | None) -> str:
-    """Return the episode's task: the one ``prefix`` tag's value, else ``fallback``.
+def sequence_task(
+    sequence: Sequence, prefixes: tuple[str, ...], fallback: str | None
+) -> str:
+    """Return the episode's task: the one tag's value under any of ``prefixes``, else ``fallback``.
 
     Raises:
         EpisodeSkip: If there is no usable tag and no fallback, or more than
-            one tag carries the prefix.
+            one tag carries a prefix.
     """
-    values = [
-        tag[len(prefix) :].strip()
-        for tag in sequence.tags
-        if tag.startswith(prefix) and tag[len(prefix) :].strip()
-    ]
+    values = []
+    for tag in sequence.tags:
+        prefix = next((p for p in prefixes if tag.startswith(p)), None)
+        if prefix is not None and tag[len(prefix) :].strip():
+            values.append(tag[len(prefix) :].strip())
+    named = " or ".join(map(repr, prefixes))
     if len(values) > 1:
-        raise EpisodeSkip(f"{len(values)} tags with prefix {prefix!r}, expected one")
+        raise EpisodeSkip(f"{len(values)} tags with prefix {named}, expected one")
     if values:
         return values[0]
     if not fallback:
-        raise EpisodeSkip(f"no tag with prefix {prefix!r} and no --task fallback")
+        raise EpisodeSkip(f"no tag with prefix {named} and no --task fallback")
     return fallback
 
 
@@ -210,7 +213,7 @@ def build_episode(
         EpisodeSkip: If the sequence has no resolvable task, a required
             stream is missing, or too little of the sequence can be aligned.
     """
-    task = sequence_task(sequence, config.task_prefix, config.task)
+    task = sequence_task(sequence, config.task_prefixes, config.task)
     camera_rows = {
         name: export.binary_rows(sequence.sequence_id, name)
         for name in config.camera_components

@@ -34,9 +34,9 @@ viam-seq-to-lerobot <export_dir> \
 
 Semantics (run `--help` for all flags):
 
-- Each episode's `task` is the value of the sequence's `cmd:` tag with the
-  prefix stripped (`cmd:open the box` → `"open the box"`; change the prefix
-  with `--task-prefix`). Sequences without one use `--task` if given and are
+- Each episode's `task` is the value of the sequence's `cmd:` or `task:` tag
+  with the prefix stripped (`cmd:open the box` → `"open the box"`; replace the
+  accepted prefixes with one or more `--task-prefix`). Sequences without one use `--task` if given and are
   skipped otherwise, so one export holding several tasks converts into one
   multi-task dataset. A sequence with more than one task tag is skipped.
 - Each sequence becomes one episode; the **first** `--camera` defines the

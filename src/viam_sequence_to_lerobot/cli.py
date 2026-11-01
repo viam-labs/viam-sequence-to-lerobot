@@ -18,7 +18,7 @@ example:
       --output-root ~/datasets/open-box-lerobot
 
 Each Viam sequence becomes one episode. Its task is the value of its
---task-prefix tag (default cmd:), falling back to --task. The camera stream
+--task-prefix tag (default cmd: or task:), falling back to --task. The camera stream
 provides the frame clock; arm readings are matched to each frame by nearest
 timestamp. With --action-space joints (default), observation.state is the
 joint angles at each frame and action is the joint angles at the next frame.
@@ -60,16 +60,17 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="TEXT",
         default=None,
         help='fallback natural-language instruction for sequences that have no '
-        'cmd: tag (see --task-prefix), e.g. "open the box"; sequences with '
+        'cmd:/task: tag (see --task-prefix), e.g. "open the box"; sequences with '
         'neither are skipped',
     )
     parser.add_argument(
         "--task-prefix",
         metavar="TEXT",
-        default="cmd:",
+        action="append",
+        dest="task_prefixes",
         help="tag prefix that supplies each sequence's instruction, with the prefix "
         'stripped: a sequence tagged "cmd:open the box" stores the task '
-        '"open the box" (default: %(default)s)',
+        '"open the box"; repeat to accept several (default: cmd: and task:)',
     )
     parser.add_argument(
         "--output-root",
@@ -195,7 +196,7 @@ def main(argv: list[str] | None = None) -> int:
             output_root=output_root,
             repo_id=repo_id,
             task=args.task,
-            task_prefix=args.task_prefix,
+            task_prefixes=tuple(args.task_prefixes or ("cmd:", "task:")),
             camera_components=tuple(args.cameras) if args.cameras else ("webcam-teleop",),
             arm_component=args.arm,
             action_space=args.action_space,
