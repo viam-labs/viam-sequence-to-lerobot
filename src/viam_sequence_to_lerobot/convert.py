@@ -59,9 +59,11 @@ class ConversionConfig:
     task: str | None = None  # fallback for sequences without a task tag
     task_prefixes: tuple[str, ...] = ("cmd:", "task:")
     camera_components: tuple[str, ...] = ("webcam-teleop",)
-    arm_component: str = "xarm"
+    arm_components: tuple[str, ...] = ("xarm",)  # concatenated in order into state and action
     action_space: str = "joints"
     action_arm: str | None = None  # arm whose JointPositions at each tick is the action
+    grippers: tuple[str, ...] = ()  # DoCommand-captured, one per arm, paired by position
+    gripper_key: str = "position"  # numeric field of each gripper's DoCommand response
     fps: int = 10
     tolerance_s: float = 0.05
     min_frames: int = 10
@@ -84,6 +86,17 @@ class ConversionConfig:
             raise ValueError(f"image_size must be positive, got {self.image_size}")
         if self.workers is not None and self.workers < 1:
             raise ValueError(f"workers must be positive, got {self.workers}")
+        if not self.arm_components:
+            raise ValueError("At least one arm component is required")
+        if self.grippers and len(self.grippers) != len(self.arm_components):
+            raise ValueError(
+                f"grippers pair one per arm: got {len(self.grippers)} for {len(self.arm_components)} arms"
+            )
+        multi = len(self.arm_components) > 1 or bool(self.grippers)
+        if multi and self.action_arm is not None:
+            raise ValueError("action_arm supports a single arm without grippers")
+        if multi and self.action_space == "delta-ee":
+            raise ValueError("delta-ee supports a single arm without grippers")
 
     @property
     def clock_camera(self) -> str:
@@ -233,9 +246,9 @@ def build_episode(
     delta_ee = config.action_space == "delta-ee"
     arm_method = "EndPosition" if delta_ee else "JointPositions"
     arm_key = "ee" if delta_ee else "joints"
-    arm_rows = export.tabular_rows(sequence.sequence_id, config.arm_component, arm_method)
+    arm_rows = export.tabular_rows(sequence.sequence_id, config.arm_components[0], arm_method)
     if not arm_rows:
-        raise EpisodeSkip(f"no {arm_method} readings from arm {config.arm_component!r}")
+        raise EpisodeSkip(f"no {arm_method} readings from arm {config.arm_components[0]!r}")
 
     clock_rows = camera_rows[config.clock_camera]
     ticks = [r.timestamp for r in clock_rows]
@@ -304,7 +317,7 @@ def build_episode(
                 # EpisodeSkip handling before any dataset is written.
                 raise ValueError(
                     f"action arm {config.action_arm!r} has {leader.shape[1]} joints but "
-                    f"arm {config.arm_component!r} has {joints.shape[1]}"
+                    f"arm {config.arm_components[0]!r} has {joints.shape[1]}"
                 )
             frame_idx = list(range(len(kept)))
             states = joints

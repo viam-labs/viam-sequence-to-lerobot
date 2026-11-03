@@ -206,7 +206,7 @@ def test_build_episode_delta_ee_drops_deltas_spanning_a_gap(synthetic_export, tm
 def test_build_episode_delta_ee_missing_endposition_skips(synthetic_export, tmp_path):
     export = load_export(synthetic_export)
     config = make_config(
-        synthetic_export, tmp_path, action_space="delta-ee", arm_component="no-such-arm"
+        synthetic_export, tmp_path, action_space="delta-ee", arm_components=("no-such-arm",)
     )
     with pytest.raises(EpisodeSkip, match="EndPosition"):
         build_episode(export, export.sequences[0], config)
@@ -218,7 +218,7 @@ def test_build_episode_delta_ee_skips_unusable_endposition(synthetic_export, tmp
     export = load_export(synthetic_export)
     config = make_config(synthetic_export, tmp_path, action_space="delta-ee")
     rows = export.tabular_rows(
-        export.sequences[0].sequence_id, config.arm_component, "EndPosition"
+        export.sequences[0].sequence_id, config.arm_components[0], "EndPosition"
     )
     rows[0].payload["pose"].update(o_x=0.0, o_y=0.0, o_z=0.0)
     with pytest.raises(EpisodeSkip, match="unusable EndPosition"):
@@ -423,7 +423,7 @@ def test_build_episode_skips_without_task(synthetic_export, tmp_path):
 def test_build_episode_reports_missing_task_before_missing_streams(synthetic_export, tmp_path):
     export = load_export(synthetic_export)
     config = make_config(
-        synthetic_export, tmp_path, task=None, arm_component="nope", camera_components=("nope",)
+        synthetic_export, tmp_path, task=None, arm_components=("nope",), camera_components=("nope",)
     )
     short = next(s for s in export.sequences if s.sequence_id == SHORT_SEQ)
     with pytest.raises(EpisodeSkip, match="no tag with prefix"):
@@ -643,3 +643,24 @@ def test_convert_failure_counts_skip_reasons(synthetic_export, tmp_path):
     config = make_config(synthetic_export, tmp_path, camera_components=("nope",))
     with pytest.raises(ValueError, match=r"2× no frames from camera 'nope'"):
         convert(config)
+
+
+@pytest.mark.parametrize(
+    "overrides, msg",
+    [
+        ({"arm_components": ()}, "At least one arm"),
+        ({"arm_components": ("a", "b"), "grippers": ("g",)}, "one per arm"),
+        ({"arm_components": ("a", "b"), "action_arm": "leader"}, "action_arm supports a single arm"),
+        ({"grippers": ("g",), "action_arm": "leader"}, "action_arm supports a single arm"),
+        ({"arm_components": ("a", "b"), "action_space": "delta-ee"}, "delta-ee supports a single arm"),
+        ({"grippers": ("g",), "action_space": "delta-ee"}, "delta-ee supports a single arm"),
+    ],
+)
+def test_config_rejects_bad_arm_layouts(synthetic_export, tmp_path, overrides, msg):
+    with pytest.raises(ValueError, match=msg):
+        make_config(synthetic_export, tmp_path, **overrides)
+
+
+def test_config_defaults_to_one_arm_without_grippers(synthetic_export, tmp_path):
+    config = make_config(synthetic_export, tmp_path)
+    assert (config.arm_components, config.grippers, config.gripper_key) == (("xarm",), (), "position")
