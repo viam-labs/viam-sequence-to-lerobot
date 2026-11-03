@@ -137,6 +137,8 @@ class ConversionSummary:
     frames_written: int = 0
     tasks_written: set[str] = field(default_factory=set)
     skipped: list[tuple[str, str]] = field(default_factory=list)  # (sequence_id, reason)
+    # The dataset's (component, width) layout in joints mode, set by convert(); empty for delta-ee.
+    segments: tuple[tuple[str, int], ...] = ()
 
     def skip(self, sequence_id: str, reason: str) -> None:
         logger.warning("Skipping sequence %s: %s", sequence_id, reason)
@@ -582,7 +584,7 @@ def convert(config: ConversionConfig) -> ConversionSummary:
     summary = ConversionSummary()
 
     episodes: list[EpisodeFrames] = []
-    dims: tuple[int, int] | None = None
+    layout: tuple | None = None  # (segments, state_dim, action_dim) of the first kept episode
     for sequence in export.sequences:
         try:
             episode = build_episode(export, sequence, config)
@@ -595,13 +597,13 @@ def convert(config: ConversionConfig) -> ConversionSummary:
                 f"only {episode.n_frames} frames (min {config.min_frames})",
             )
             continue
-        episode_dims = (episode.states.shape[1], episode.actions.shape[1])
-        if dims is None:
-            dims = episode_dims
-        elif episode_dims != dims:
+        episode_layout = (episode.segments, episode.states.shape[1], episode.actions.shape[1])
+        if layout is None:
+            layout = episode_layout
+        elif episode_layout != layout:
             summary.skip(
                 sequence.sequence_id,
-                f"state/action dims {episode_dims} != {dims}",
+                f"state/action layout {episode_layout} != {layout}",
             )
             continue
         episodes.append(episode)
@@ -610,12 +612,19 @@ def convert(config: ConversionConfig) -> ConversionSummary:
         reasons = Counter(reason for _, reason in summary.skipped)
         detail = "; ".join(f"{n}× {reason}" for reason, n in reasons.most_common())
         raise ValueError(f"No convertible episodes found in the export ({detail or 'no sequences'})")
-    assert dims is not None
-    state_dim, action_dim = dims
+    assert layout is not None
+    segments, state_dim, action_dim = layout
     if config.action_space == "delta-ee":
         state_names, action_names = STATE_NAMES, ACTION_NAMES
-    else:
+    elif len(segments) == 1:
         state_names = action_names = joint_names(state_dim)
+    else:
+        state_names = action_names = [
+            f"{name}.{config.gripper_key}" if name in config.grippers else f"{name}.joint_{i}"
+            for name, width in segments
+            for i in range(width)
+        ]
+    summary.segments = segments  # set here: merge() of the shard summaries does not carry it
 
     image_shapes = {
         camera: _load_image(episodes[0].images[camera][0], config.image_size).shape

@@ -242,6 +242,7 @@ def test_convert_end_to_end_delta_ee(synthetic_export, tmp_path):
 
     assert summary.episodes_written == 1
     assert summary.frames_written == GOOD_TICKS - 1
+    assert summary.segments == ()
 
     dataset = LeRobotDataset(repo_id=config.repo_id, root=config.output_root)
     assert dataset.meta.features["observation.state"]["names"] == STATE_NAMES
@@ -742,3 +743,32 @@ def test_build_episode_boolean_gripper_value_fails(bimanual_export, tmp_path):
     config = bimanual_config(bimanual_export, tmp_path, gripper_key="is_moving")
     with pytest.raises(ValueError, match="no numeric 'is_moving'"):
         build_episode(export, _sequence(export, BIMANUAL_SEQ), config)
+
+
+def test_convert_bimanual_names_layout_and_skips(bimanual_export, tmp_path):
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    config = bimanual_config(bimanual_export, tmp_path)
+    summary = convert(config)
+
+    assert summary.segments == BIMANUAL_SEGMENTS
+    skipped = dict(summary.skipped)
+    assert set(skipped) == {NO_GRIPPER_SEQ, WIDE_SEQ}
+    assert "layout" in skipped[WIDE_SEQ]
+    names = LeRobotDataset(repo_id=config.repo_id, root=config.output_root).meta.features[
+        "observation.state"
+    ]["names"]
+    assert names == [
+        *(f"{LEFT_ARM}.joint_{i}" for i in range(N_JOINTS)), f"{LEFT_GRIPPER}.position",
+        *(f"{RIGHT_ARM}.joint_{i}" for i in range(N_JOINTS)), f"{RIGHT_GRIPPER}.position",
+    ]
+
+
+def test_convert_single_arm_keeps_plain_joint_names(synthetic_export, tmp_path):
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    config = make_config(synthetic_export, tmp_path)
+    summary = convert(config)
+    assert summary.segments == ((ARM, N_JOINTS),)
+    features = LeRobotDataset(repo_id=config.repo_id, root=config.output_root).meta.features
+    assert features["observation.state"]["names"] == [f"joint_{i}" for i in range(N_JOINTS)]
