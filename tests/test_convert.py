@@ -432,7 +432,7 @@ def test_build_episode_skips_without_task(synthetic_export, tmp_path):
 def test_build_episode_reports_missing_task_before_missing_streams(synthetic_export, tmp_path):
     export = load_export(synthetic_export)
     config = make_config(
-        synthetic_export, tmp_path, task=None, arm_components=("nope",), camera_components=("nope",)
+        synthetic_export, tmp_path, task=None, arm_components=("nope-arm",), camera_components=("nope",)
     )
     short = next(s for s in export.sequences if s.sequence_id == SHORT_SEQ)
     with pytest.raises(EpisodeSkip, match="no tag with prefix"):
@@ -663,6 +663,8 @@ def test_convert_failure_counts_skip_reasons(synthetic_export, tmp_path):
         ({"grippers": ("g",), "action_arm": "leader"}, "action_arm supports a single arm"),
         ({"arm_components": ("a", "b"), "action_space": "delta-ee"}, "delta-ee supports a single arm"),
         ({"grippers": ("g",), "action_space": "delta-ee"}, "delta-ee supports a single arm"),
+        ({"arm_components": ("a", "b"), "grippers": ("g", "a")}, "must be distinct"),
+        ({"camera_components": ("xarm",)}, "must be distinct"),
     ],
 )
 def test_config_rejects_bad_arm_layouts(synthetic_export, tmp_path, overrides, msg):
@@ -733,3 +735,10 @@ def test_build_episode_single_arm_segments(synthetic_export, tmp_path):
     export = load_export(synthetic_export)
     episode = build_episode(export, export.sequences[0], make_config(synthetic_export, tmp_path))
     assert episode.segments == ((ARM, N_JOINTS),)
+
+
+def test_build_episode_boolean_gripper_value_fails(bimanual_export, tmp_path):
+    export = load_export(bimanual_export)
+    config = bimanual_config(bimanual_export, tmp_path, gripper_key="is_moving")
+    with pytest.raises(ValueError, match="no numeric 'is_moving'"):
+        build_episode(export, _sequence(export, BIMANUAL_SEQ), config)

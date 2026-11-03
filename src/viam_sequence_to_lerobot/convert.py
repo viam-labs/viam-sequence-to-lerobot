@@ -100,6 +100,9 @@ class ConversionConfig:
             raise ValueError("action_arm supports a single arm without grippers")
         if multi and self.action_space == "delta-ee":
             raise ValueError("delta-ee supports a single arm without grippers")
+        names = [*self.camera_components, *self.arm_components, *self.grippers]
+        if len(set(names)) != len(names):
+            raise ValueError(f"camera, arm and gripper names must be distinct: {names}")
 
     @property
     def clock_camera(self) -> str:
@@ -204,8 +207,11 @@ def joint_values(payload: dict) -> list[float]:
 def gripper_value(payload: dict, key: str, component: str) -> float:
     """Extract a gripper position from a captured DoCommand payload ({"docommand_output": {...}})."""
     try:
-        return float(payload["docommand_output"][key])
-    except (KeyError, TypeError, ValueError) as exc:
+        value = payload["docommand_output"][key]
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise TypeError(value)
+        return float(value)
+    except (KeyError, TypeError) as exc:
         # A config error (wrong --gripper-key or capture command), not a per-sequence one:
         # raise past convert()'s EpisodeSkip handling so the run fails instead of skipping everything.
         raise ValueError(
