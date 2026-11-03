@@ -89,3 +89,18 @@ def test_importing_convert_leaves_root_logging_alone():
         check=True,
     )
     assert out.stdout.strip() == "0"
+
+
+def test_arm_defaults_to_one_arm_without_grippers(synthetic_export, tmp_path, monkeypatch):
+    config = run_main(synthetic_export, tmp_path, monkeypatch)
+    assert (config.arm_components, config.grippers, config.gripper_key) == (("xarm",), (), "position")
+
+
+def test_arms_and_grippers(synthetic_export, tmp_path, monkeypatch):
+    config = run_main(
+        synthetic_export, tmp_path, monkeypatch,
+        "--arm", "left-arm", "right-arm", "--grippers", "left-gripper", "right-gripper", "--gripper-key", "width",
+    )
+    assert config.arm_components == ("left-arm", "right-arm")
+    assert config.grippers == ("left-gripper", "right-gripper")
+    assert config.gripper_key == "width"

@@ -105,9 +105,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--arm",
         metavar="COMPONENT",
-        default="xarm",
-        help="name of the Viam arm component whose readings become "
-        "observation.state and action (default: %(default)s)",
+        nargs="+",
+        default=["xarm"],
+        help="Viam arm component(s) whose JointPositions become observation.state and action; "
+        "several arms are concatenated in order (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--grippers",
+        metavar="COMPONENT",
+        nargs="+",
+        default=[],
+        help="gripper components captured with DoCommand, one per --arm in the same order; each "
+        "gripper's position follows its arm's joints (joints action space, next-state actions)",
+    )
+    parser.add_argument(
+        "--gripper-key",
+        default="position",
+        help="numeric field of each gripper's captured DoCommand response (default: %(default)s)",
     )
     parser.add_argument(
         "--action-space",
@@ -208,7 +222,9 @@ def main(argv: list[str] | None = None) -> int:
             task=args.task,
             task_prefixes=tuple(args.task_prefixes or ("cmd:", "task:")),
             camera_components=tuple(args.cameras) if args.cameras else ("webcam-teleop",),
-            arm_components=(args.arm,),
+            arm_components=tuple(args.arm),
+            grippers=tuple(args.grippers),
+            gripper_key=args.gripper_key,
             action_space=args.action_space,
             action_arm=args.action_arm,
             fps=args.fps,

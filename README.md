@@ -6,8 +6,8 @@ VLA policy (SmolVLA, pi0, ACT, ...).
 
 ## Before: capture and export from Viam
 
-1. **Capture** on your machine: each camera via `GetImages` and the arm via
-   `JointPositions` (plus `EndPosition` if you want `--action-space delta-ee`),
+1. **Capture** on your machine: each camera via `GetImages` and the arm(s) via
+   `JointPositions` (and grippers via `DoCommand`) (plus `EndPosition` if you want `--action-space delta-ee`),
    all at the same rate (e.g. 10 Hz). One recorded demonstration = one
    sequence.
 2. **Create sequences** over each demonstration's time range (part, resources,
@@ -62,6 +62,17 @@ Semantics (run `--help` for all flags):
   a teleop leader arm captured alongside the follower. It is aligned like any
   other stream; frames without a leader reading within `--tolerance-s` are
   dropped. A joint-count mismatch with `--arm` is an error.
+- Several arms and grippers: `viam-seq-to-lerobot <export-dir> --arm left-arm right-arm --grippers left-gripper right-gripper`
+  (the export dir goes first: a list flag would swallow it).
+  `observation.state` is `[left-arm joints…, left-gripper, right-arm joints…, right-gripper]`, and
+  `action` is the next frame's state. Capture each gripper with `DoCommand` and a fixed
+  `docommand_input` whose response holds its position under `--gripper-key` (default
+  `position`); the converter reads `docommand_output.<key>`. Feature names are prefixed by
+  component (`left-arm.joint_0`, `left-gripper.position`). A gripper reading without that numeric
+  key is an error; an episode whose layout (components and joint counts) differs from the first
+  is skipped. `--action-arm` and `delta-ee` stay single-arm without grippers. Every frame needs
+  a reading from every stream within `--tolerance-s`, so more components drop more frames when
+  captures drift.
 - Sequences missing a listed camera and episodes shorter than `--min-frames`
   are skipped, with reasons logged.
 - Frames are encoded as MP4 video; the output loads with `LeRobotDataset`
