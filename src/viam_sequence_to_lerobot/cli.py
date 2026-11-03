@@ -28,8 +28,8 @@ dims), and action is the body-frame delta to the next frame's pose as
 [dx,dy,dz] in mm plus an axis-angle rotation in radians (6 dims). Camera
 frames are encoded as MP4 video. The result loads with LeRobotDataset and
 trains with lerobot-train as-is.
-Several --arm values are concatenated in order, each followed by its --grippers
-entry's docommand_output.<key>.
+Several --arm values are concatenated in order; each arm's joints are followed by
+its gripper's docommand_output.<--gripper-key>.
 """
 
 
@@ -108,7 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="+",
         default=["xarm"],
         help="Viam arm component(s) whose JointPositions become observation.state and action; "
-        "several arms are concatenated in order (default: %(default)s)",
+        "several arms are concatenated in order (default: xarm)",
     )
     parser.add_argument(
         "--grippers",
