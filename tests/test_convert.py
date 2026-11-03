@@ -24,6 +24,15 @@ from viam_sequence_to_lerobot.export_reader import Sequence, load_export
 from viam_sequence_to_lerobot.pose import ACTION_NAMES, STATE_NAMES, state_compose
 
 from conftest import (
+    BIMANUAL_SEQ,
+    BIMANUAL_TICKS,
+    LEFT_ARM,
+    LEFT_GRIPPER,
+    NO_GRIPPER_SEQ,
+    RIGHT_ARM,
+    RIGHT_GRIPPER,
+    WIDE_SEQ,
+    arm_values,
     ARM,
     CAMERA,
     GOOD_SEQ,
@@ -206,7 +215,7 @@ def test_build_episode_delta_ee_drops_deltas_spanning_a_gap(synthetic_export, tm
 def test_build_episode_delta_ee_missing_endposition_skips(synthetic_export, tmp_path):
     export = load_export(synthetic_export)
     config = make_config(
-        synthetic_export, tmp_path, action_space="delta-ee", arm_component="no-such-arm"
+        synthetic_export, tmp_path, action_space="delta-ee", arm_components=("no-such-arm",)
     )
     with pytest.raises(EpisodeSkip, match="EndPosition"):
         build_episode(export, export.sequences[0], config)
@@ -218,7 +227,7 @@ def test_build_episode_delta_ee_skips_unusable_endposition(synthetic_export, tmp
     export = load_export(synthetic_export)
     config = make_config(synthetic_export, tmp_path, action_space="delta-ee")
     rows = export.tabular_rows(
-        export.sequences[0].sequence_id, config.arm_component, "EndPosition"
+        export.sequences[0].sequence_id, config.arm_components[0], "EndPosition"
     )
     rows[0].payload["pose"].update(o_x=0.0, o_y=0.0, o_z=0.0)
     with pytest.raises(EpisodeSkip, match="unusable EndPosition"):
@@ -233,6 +242,7 @@ def test_convert_end_to_end_delta_ee(synthetic_export, tmp_path):
 
     assert summary.episodes_written == 1
     assert summary.frames_written == GOOD_TICKS - 1
+    assert summary.segments == ()
 
     dataset = LeRobotDataset(repo_id=config.repo_id, root=config.output_root)
     assert dataset.meta.features["observation.state"]["names"] == STATE_NAMES
@@ -423,7 +433,7 @@ def test_build_episode_skips_without_task(synthetic_export, tmp_path):
 def test_build_episode_reports_missing_task_before_missing_streams(synthetic_export, tmp_path):
     export = load_export(synthetic_export)
     config = make_config(
-        synthetic_export, tmp_path, task=None, arm_component="nope", camera_components=("nope",)
+        synthetic_export, tmp_path, task=None, arm_components=("nope-arm",), camera_components=("nope",)
     )
     short = next(s for s in export.sequences if s.sequence_id == SHORT_SEQ)
     with pytest.raises(EpisodeSkip, match="no tag with prefix"):
@@ -630,7 +640,7 @@ def test_convert_action_arm_joint_mismatch_fails_before_writing(synthetic_export
 def test_build_episode_missing_action_arm_skips(synthetic_export, tmp_path):
     export = load_export(synthetic_export)
     config = make_config(synthetic_export, tmp_path, action_arm="nope")
-    with pytest.raises(EpisodeSkip, match="action arm 'nope'"):
+    with pytest.raises(EpisodeSkip, match="from 'nope'"):
         build_episode(export, export.sequences[0], config)
 
 
@@ -643,3 +653,122 @@ def test_convert_failure_counts_skip_reasons(synthetic_export, tmp_path):
     config = make_config(synthetic_export, tmp_path, camera_components=("nope",))
     with pytest.raises(ValueError, match=r"2× no frames from camera 'nope'"):
         convert(config)
+
+
+@pytest.mark.parametrize(
+    "overrides, msg",
+    [
+        ({"arm_components": ()}, "At least one arm"),
+        ({"arm_components": ("a", "b"), "grippers": ("g",)}, "one per arm"),
+        ({"arm_components": ("a", "b"), "action_arm": "leader"}, "action_arm supports a single arm"),
+        ({"grippers": ("g",), "action_arm": "leader"}, "action_arm supports a single arm"),
+        ({"arm_components": ("a", "b"), "action_space": "delta-ee"}, "delta-ee supports a single arm"),
+        ({"grippers": ("g",), "action_space": "delta-ee"}, "delta-ee supports a single arm"),
+        ({"arm_components": ("a", "b"), "grippers": ("g", "a")}, "must be distinct"),
+        ({"camera_components": ("xarm",)}, "must be distinct"),
+    ],
+)
+def test_config_rejects_bad_arm_layouts(synthetic_export, tmp_path, overrides, msg):
+    with pytest.raises(ValueError, match=msg):
+        make_config(synthetic_export, tmp_path, **overrides)
+
+
+def test_config_defaults_to_one_arm_without_grippers(synthetic_export, tmp_path):
+    config = make_config(synthetic_export, tmp_path)
+    assert (config.arm_components, config.grippers, config.gripper_key) == (("xarm",), (), "position")
+
+
+BIMANUAL_SEGMENTS = ((LEFT_ARM, N_JOINTS), (LEFT_GRIPPER, 1), (RIGHT_ARM, N_JOINTS), (RIGHT_GRIPPER, 1))
+
+
+def bimanual_config(bimanual_export, tmp_path, **overrides) -> ConversionConfig:
+    defaults = dict(
+        export_dir=bimanual_export,
+        camera_components=(CAMERA,),
+        arm_components=(LEFT_ARM, RIGHT_ARM),
+        grippers=(LEFT_GRIPPER, RIGHT_GRIPPER),
+        min_frames=5,
+    )
+    return make_config(bimanual_export, tmp_path, **(defaults | overrides))
+
+
+def _sequence(export, sequence_id):
+    return next(s for s in export.sequences if s.sequence_id == sequence_id)
+
+
+def test_build_episode_bimanual_layout(bimanual_export, tmp_path):
+    export = load_export(bimanual_export)
+    episode = build_episode(export, _sequence(export, BIMANUAL_SEQ), bimanual_config(bimanual_export, tmp_path))
+
+    assert episode.segments == BIMANUAL_SEGMENTS
+    # Next-state actions: the last tick is an action target only.
+    assert episode.n_frames == BIMANUAL_TICKS - 1
+    assert episode.states.shape == episode.actions.shape == (BIMANUAL_TICKS - 1, 2 * (N_JOINTS + 1))
+    t = 2
+    expected = [*arm_values(t, 0.0), 10.0 * t, *arm_values(t, 100.0), 500.0 + t]
+    np.testing.assert_allclose(episode.states[t], expected, rtol=1e-6)
+    np.testing.assert_allclose(episode.actions[:-1], episode.states[1:])
+    assert episode.actions[-1, N_JOINTS] == 10.0 * (BIMANUAL_TICKS - 1)
+
+
+def test_build_episode_one_arm_with_gripper(bimanual_export, tmp_path):
+    export = load_export(bimanual_export)
+    config = bimanual_config(bimanual_export, tmp_path, arm_components=(LEFT_ARM,), grippers=(LEFT_GRIPPER,))
+    episode = build_episode(export, _sequence(export, BIMANUAL_SEQ), config)
+    assert episode.segments == ((LEFT_ARM, N_JOINTS), (LEFT_GRIPPER, 1))
+    assert episode.states.shape[1] == N_JOINTS + 1
+
+
+def test_build_episode_missing_gripper_skips(bimanual_export, tmp_path):
+    export = load_export(bimanual_export)
+    with pytest.raises(EpisodeSkip, match=RIGHT_GRIPPER):
+        build_episode(export, _sequence(export, NO_GRIPPER_SEQ), bimanual_config(bimanual_export, tmp_path))
+
+
+def test_build_episode_gripper_without_key_fails(bimanual_export, tmp_path):
+    export = load_export(bimanual_export)
+    config = bimanual_config(bimanual_export, tmp_path, gripper_key="width")
+    with pytest.raises(ValueError, match=f"{LEFT_GRIPPER!r}.*no numeric 'width'"):
+        build_episode(export, _sequence(export, BIMANUAL_SEQ), config)
+
+
+def test_build_episode_single_arm_segments(synthetic_export, tmp_path):
+    export = load_export(synthetic_export)
+    episode = build_episode(export, export.sequences[0], make_config(synthetic_export, tmp_path))
+    assert episode.segments == ((ARM, N_JOINTS),)
+
+
+def test_build_episode_boolean_gripper_value_fails(bimanual_export, tmp_path):
+    export = load_export(bimanual_export)
+    config = bimanual_config(bimanual_export, tmp_path, gripper_key="is_moving")
+    with pytest.raises(ValueError, match="no numeric 'is_moving'"):
+        build_episode(export, _sequence(export, BIMANUAL_SEQ), config)
+
+
+def test_convert_bimanual_names_layout_and_skips(bimanual_export, tmp_path):
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    config = bimanual_config(bimanual_export, tmp_path)
+    summary = convert(config)
+
+    assert summary.segments == BIMANUAL_SEGMENTS
+    skipped = dict(summary.skipped)
+    assert set(skipped) == {NO_GRIPPER_SEQ, WIDE_SEQ}
+    assert "layout" in skipped[WIDE_SEQ]
+    names = LeRobotDataset(repo_id=config.repo_id, root=config.output_root).meta.features[
+        "observation.state"
+    ]["names"]
+    assert names == [
+        *(f"{LEFT_ARM}.joint_{i}" for i in range(N_JOINTS)), f"{LEFT_GRIPPER}.position",
+        *(f"{RIGHT_ARM}.joint_{i}" for i in range(N_JOINTS)), f"{RIGHT_GRIPPER}.position",
+    ]
+
+
+def test_convert_single_arm_keeps_plain_joint_names(synthetic_export, tmp_path):
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    config = make_config(synthetic_export, tmp_path)
+    summary = convert(config)
+    assert summary.segments == ((ARM, N_JOINTS),)
+    features = LeRobotDataset(repo_id=config.repo_id, root=config.output_root).meta.features
+    assert features["observation.state"]["names"] == [f"joint_{i}" for i in range(N_JOINTS)]

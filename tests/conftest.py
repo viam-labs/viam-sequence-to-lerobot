@@ -110,3 +110,64 @@ def synthetic_export(tmp_path: Path) -> Path:
     pq.write_table(pa.table(tabular), export_dir / "tabular_data.parquet")
     pq.write_table(pa.table(binary), export_dir / "binary_data.parquet")
     return export_dir
+
+
+LEFT_ARM, RIGHT_ARM = "left-arm", "right-arm"
+LEFT_GRIPPER, RIGHT_GRIPPER = "left-gripper", "right-gripper"
+BIMANUAL_SEQ = "33333333-3333-3333-3333-333333333333"
+NO_GRIPPER_SEQ = "44444444-4444-4444-4444-444444444444"
+WIDE_SEQ = "55555555-5555-5555-5555-555555555555"
+BIMANUAL_TICKS = 12
+
+
+def arm_values(tick: int, base: float, n: int = N_JOINTS) -> list[float]:
+    return [base + tick + j * 0.01 for j in range(n)]
+
+
+@pytest.fixture
+def bimanual_export(tmp_path: Path) -> Path:
+    """Two arms (JointPositions) and two grippers (DoCommand), three 12-tick sequences at 10 Hz.
+
+    - BIMANUAL_SEQ: complete. Left arm values tick + j*0.01, right arm 100 + tick + j*0.01,
+      left gripper 10*tick, right gripper 500 + tick; readings 1-4 ms after each tick.
+    - NO_GRIPPER_SEQ: the right gripper was never captured (skipped).
+    - WIDE_SEQ: the right arm reports 7 joints (a different layout, skipped by convert()).
+    """
+    export_dir = tmp_path / "bimanual"
+    export_dir.mkdir()
+    seqs = [BIMANUAL_SEQ, NO_GRIPPER_SEQ, WIDE_SEQ]
+    starts = [BASE + timedelta(minutes=i) for i in range(len(seqs))]
+    sequences = {
+        "sequence_id": seqs,
+        "tags": [["cmd:hand over the cube"]] * len(seqs),
+        "start_at": starts,
+        "end_at": [s + timedelta(seconds=2) for s in starts],
+    }
+    columns = ["sequence_id", "timestamp", "part_id", "component_name", "method_name"]
+    tabular = {k: [] for k in [*columns, "payload"]}
+    binary = {k: [] for k in [*columns, "path"]}
+
+    def add(table, seq, ts, component, method, key, value):
+        for k, v in zip([*columns, key], [seq, ts, "part-1", component, method, value]):
+            table[k].append(v)
+
+    for seq, start in zip(seqs, starts):
+        for tick in range(BIMANUAL_TICKS):
+            ts = start + timedelta(seconds=0.1 * tick)
+            rel = f"binary_data/{seq}/cam/{tick:04d}.jpeg"
+            _write_image(export_dir / rel, tick)
+            add(binary, seq, ts, CAMERA, "GetImages", "path", rel)
+            right_n = N_JOINTS + 1 if seq == WIDE_SEQ else N_JOINTS
+            for i, (arm, base, n) in enumerate(((LEFT_ARM, 0.0, N_JOINTS), (RIGHT_ARM, 100.0, right_n))):
+                payload = json.dumps({"positions": {"values": arm_values(tick, base, n)}})
+                add(tabular, seq, ts + timedelta(milliseconds=1 + i), arm, "JointPositions", "payload", payload)
+            for i, (gripper, value) in enumerate(((LEFT_GRIPPER, 10.0 * tick), (RIGHT_GRIPPER, 500.0 + tick))):
+                if seq == NO_GRIPPER_SEQ and gripper == RIGHT_GRIPPER:
+                    continue
+                payload = json.dumps({"docommand_output": {"position": value, "is_moving": False}})
+                add(tabular, seq, ts + timedelta(milliseconds=3 + i), gripper, "DoCommand", "payload", payload)
+
+    pq.write_table(pa.table(sequences), export_dir / "sequences.parquet")
+    pq.write_table(pa.table(tabular), export_dir / "tabular_data.parquet")
+    pq.write_table(pa.table(binary), export_dir / "binary_data.parquet")
+    return export_dir
