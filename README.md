@@ -57,6 +57,11 @@ Semantics (run `--help` for all flags):
   everywhere, and this arm holds its tool within 0.03 rad of π — exactly where
   an axis-angle state flips sign under smooth motion. Actions keep three
   because a per-tick rotation is ~0.02 rad, far from that cut.
+- `--action-arm COMPONENT` (joints only): `action` = that arm's
+  `JointPositions` at the same frame instead of the next frame's state, e.g.
+  a teleop leader arm captured alongside the follower. It is aligned like any
+  other stream; frames without a leader reading within `--tolerance-s` are
+  dropped. A joint-count mismatch with `--arm` is an error.
 - Sequences missing a listed camera and episodes shorter than `--min-frames`
   are skipped, with reasons logged.
 - Frames are encoded as MP4 video; the output loads with `LeRobotDataset`

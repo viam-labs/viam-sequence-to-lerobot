@@ -34,6 +34,11 @@ def test_action_space_delta_ee(synthetic_export, tmp_path, monkeypatch):
     assert config.action_space == "delta-ee"
 
 
+def test_action_arm(synthetic_export, tmp_path, monkeypatch):
+    config = run_main(synthetic_export, tmp_path, monkeypatch, "--action-arm", "leader-arm")
+    assert config.action_arm == "leader-arm"
+
+
 def test_task_is_optional_and_prefix_defaults(synthetic_export, tmp_path, monkeypatch):
     config = run_main(synthetic_export, tmp_path, monkeypatch)
     assert config.task is None
