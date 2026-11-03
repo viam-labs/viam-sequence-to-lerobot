@@ -13,6 +13,9 @@ Mapping (Viam capture -> LeRobot feature):
   (9 dims) -> ``observation.state``; body-frame delta to the next tick's pose,
   translation plus axis-angle (6 dims) -> ``action``
 
+Several arms are concatenated in order, each followed by its paired gripper's
+``docommand_output.<gripper_key>``; ``EpisodeFrames.segments`` records the layout.
+
 Arm readings and the frames of every non-clock camera are matched to each
 clock tick by nearest timestamp within ``tolerance_s``; ticks that cannot be
 fully matched are dropped. Sequences missing any configured camera entirely
@@ -117,6 +120,8 @@ class EpisodeFrames:
     images: dict[str, list[Path]]  # camera component -> one path per frame
     states: np.ndarray  # (n_frames, state_dim) float32
     actions: np.ndarray  # (n_frames, action_dim) float32
+    # (component, width) per state/action segment, in vector order; empty in delta-ee mode.
+    segments: tuple[tuple[str, int], ...] = ()
 
     @property
     def n_frames(self) -> int:
@@ -196,6 +201,18 @@ def joint_values(payload: dict) -> list[float]:
     return [float(v) for v in payload["positions"]["values"]]
 
 
+def gripper_value(payload: dict, key: str, component: str) -> float:
+    """Extract a gripper position from a captured DoCommand payload ({"docommand_output": {...}})."""
+    try:
+        return float(payload["docommand_output"][key])
+    except (KeyError, TypeError, ValueError) as exc:
+        # A config error (wrong --gripper-key or capture command), not a per-sequence one:
+        # raise past convert()'s EpisodeSkip handling so the run fails instead of skipping everything.
+        raise ValueError(
+            f"gripper {component!r}: no numeric {key!r} in DoCommand output {payload!r}"
+        ) from exc
+
+
 def joint_names(n_joints: int) -> list[str]:
     return [f"joint_{i}" for i in range(n_joints)]
 
@@ -232,7 +249,8 @@ def build_episode(
     Raises:
         EpisodeSkip: If the sequence has no resolvable task, a required
             stream is missing, or too little of the sequence can be aligned.
-        ValueError: If action_arm's joint count differs from the arm's (a
+        ValueError: If a gripper's DoCommand output lacks a numeric gripper_key, or
+            action_arm's joint count differs from the arm's (a
             config error, not skipped).
     """
     task = sequence_task(sequence, config.task_prefixes, config.task)
@@ -244,22 +262,20 @@ def build_episode(
         if not rows:
             raise EpisodeSkip(f"no frames from camera {name!r}")
     delta_ee = config.action_space == "delta-ee"
-    arm_method = "EndPosition" if delta_ee else "JointPositions"
-    arm_key = "ee" if delta_ee else "joints"
-    arm_rows = export.tabular_rows(sequence.sequence_id, config.arm_components[0], arm_method)
-    if not arm_rows:
-        raise EpisodeSkip(f"no {arm_method} readings from arm {config.arm_components[0]!r}")
+    # Each tabular stream is keyed by its component name, so rate warnings and skips name it.
+    methods = {arm: "EndPosition" if delta_ee else "JointPositions" for arm in config.arm_components}
+    methods |= {gripper: "DoCommand" for gripper in config.grippers}
+    if config.action_arm is not None:
+        methods[config.action_arm] = "JointPositions"
 
     clock_rows = camera_rows[config.clock_camera]
     ticks = [r.timestamp for r in clock_rows]
-    streams: dict[str, list] = {
-        arm_key: [(r.timestamp, r) for r in arm_rows],
-    }
-    if config.action_arm is not None:
-        leader_rows = export.tabular_rows(sequence.sequence_id, config.action_arm, "JointPositions")
-        if not leader_rows:
-            raise EpisodeSkip(f"no JointPositions readings from action arm {config.action_arm!r}")
-        streams[config.action_arm] = [(r.timestamp, r) for r in leader_rows]
+    streams: dict[str, list] = {}
+    for name, method in methods.items():
+        rows = export.tabular_rows(sequence.sequence_id, name, method)
+        if not rows:
+            raise EpisodeSkip(f"no {method} readings from {name!r}")
+        streams[name] = [(r.timestamp, r) for r in rows]
     for name in config.camera_components[1:]:
         streams[name] = [(r.timestamp, r) for r in camera_rows[name]]
 
@@ -277,9 +293,10 @@ def build_episode(
     if len(kept) < 2:
         raise EpisodeSkip("fewer than 2 fully aligned frames")
 
+    segments: list[tuple[str, int]] = []
     if delta_ee:
         try:
-            poses = np.stack([pose_state(r.payload) for r in aligned["ee"]])
+            poses = np.stack([pose_state(r.payload) for r in aligned[config.arm_components[0]]])
         except (KeyError, ValueError) as exc:
             raise EpisodeSkip(f"unusable EndPosition reading: {exc}") from exc
         # A delta is only honest between adjacent clock ticks. Where alignment
@@ -303,30 +320,42 @@ def build_episode(
             [state_delta(poses[i], poses[i + 1]) for i in frame_idx]
         ).astype(np.float32)
     else:
-        joints = np.array([joint_values(r.payload) for r in aligned["joints"]], dtype=np.float32)
+        parts = []
+        for i, arm in enumerate(config.arm_components):
+            joints = np.array([joint_values(r.payload) for r in aligned[arm]], dtype=np.float32)
+            parts.append(joints)
+            segments.append((arm, joints.shape[1]))
+            if config.grippers:
+                gripper = config.grippers[i]
+                values = [[gripper_value(r.payload, config.gripper_key, gripper)] for r in aligned[gripper]]
+                parts.append(np.array(values, dtype=np.float32))
+                segments.append((gripper, 1))
+        rows = np.concatenate(parts, axis=1)
         if config.action_arm is None:
             frame_idx = list(range(len(kept) - 1))
-            states = joints[:-1]
-            actions = joints[1:]  # command for tick t is the measured joints at tick t+1
+            states = rows[:-1]
+            actions = rows[1:]  # command for tick t is the measured state at tick t+1
         else:
+            # Single arm, no grippers (validated), so rows is that arm's joints.
             leader = np.array(
                 [joint_values(r.payload) for r in aligned[config.action_arm]], dtype=np.float32
             )
-            if leader.shape[1] != joints.shape[1]:
+            if leader.shape[1] != rows.shape[1]:
                 # A config error, not a per-sequence one: raise past convert()'s
                 # EpisodeSkip handling before any dataset is written.
                 raise ValueError(
                     f"action arm {config.action_arm!r} has {leader.shape[1]} joints but "
-                    f"arm {config.arm_components[0]!r} has {joints.shape[1]}"
+                    f"arm {config.arm_components[0]!r} has {rows.shape[1]}"
                 )
             frame_idx = list(range(len(kept)))
-            states = joints
+            states = rows
             actions = leader  # the leader's position at tick t is the command at tick t
     images = {config.clock_camera: [clock_rows[kept[i]].path for i in frame_idx]}
     for name in config.camera_components[1:]:
         images[name] = [aligned[name][i].path for i in frame_idx]
     return EpisodeFrames(
-        sequence=sequence, task=task, images=images, states=states, actions=actions
+        sequence=sequence, task=task, images=images, states=states, actions=actions,
+        segments=tuple(segments),
     )
 
 

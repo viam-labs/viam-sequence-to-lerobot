@@ -24,6 +24,15 @@ from viam_sequence_to_lerobot.export_reader import Sequence, load_export
 from viam_sequence_to_lerobot.pose import ACTION_NAMES, STATE_NAMES, state_compose
 
 from conftest import (
+    BIMANUAL_SEQ,
+    BIMANUAL_TICKS,
+    LEFT_ARM,
+    LEFT_GRIPPER,
+    NO_GRIPPER_SEQ,
+    RIGHT_ARM,
+    RIGHT_GRIPPER,
+    WIDE_SEQ,
+    arm_values,
     ARM,
     CAMERA,
     GOOD_SEQ,
@@ -630,7 +639,7 @@ def test_convert_action_arm_joint_mismatch_fails_before_writing(synthetic_export
 def test_build_episode_missing_action_arm_skips(synthetic_export, tmp_path):
     export = load_export(synthetic_export)
     config = make_config(synthetic_export, tmp_path, action_arm="nope")
-    with pytest.raises(EpisodeSkip, match="action arm 'nope'"):
+    with pytest.raises(EpisodeSkip, match="from 'nope'"):
         build_episode(export, export.sequences[0], config)
 
 
@@ -664,3 +673,63 @@ def test_config_rejects_bad_arm_layouts(synthetic_export, tmp_path, overrides, m
 def test_config_defaults_to_one_arm_without_grippers(synthetic_export, tmp_path):
     config = make_config(synthetic_export, tmp_path)
     assert (config.arm_components, config.grippers, config.gripper_key) == (("xarm",), (), "position")
+
+
+BIMANUAL_SEGMENTS = ((LEFT_ARM, N_JOINTS), (LEFT_GRIPPER, 1), (RIGHT_ARM, N_JOINTS), (RIGHT_GRIPPER, 1))
+
+
+def bimanual_config(bimanual_export, tmp_path, **overrides) -> ConversionConfig:
+    defaults = dict(
+        export_dir=bimanual_export,
+        camera_components=(CAMERA,),
+        arm_components=(LEFT_ARM, RIGHT_ARM),
+        grippers=(LEFT_GRIPPER, RIGHT_GRIPPER),
+        min_frames=5,
+    )
+    return make_config(bimanual_export, tmp_path, **(defaults | overrides))
+
+
+def _sequence(export, sequence_id):
+    return next(s for s in export.sequences if s.sequence_id == sequence_id)
+
+
+def test_build_episode_bimanual_layout(bimanual_export, tmp_path):
+    export = load_export(bimanual_export)
+    episode = build_episode(export, _sequence(export, BIMANUAL_SEQ), bimanual_config(bimanual_export, tmp_path))
+
+    assert episode.segments == BIMANUAL_SEGMENTS
+    # Next-state actions: the last tick is an action target only.
+    assert episode.n_frames == BIMANUAL_TICKS - 1
+    assert episode.states.shape == episode.actions.shape == (BIMANUAL_TICKS - 1, 2 * (N_JOINTS + 1))
+    t = 2
+    expected = [*arm_values(t, 0.0), 10.0 * t, *arm_values(t, 100.0), 500.0 + t]
+    np.testing.assert_allclose(episode.states[t], expected, rtol=1e-6)
+    np.testing.assert_allclose(episode.actions[:-1], episode.states[1:])
+    assert episode.actions[-1, N_JOINTS] == 10.0 * (BIMANUAL_TICKS - 1)
+
+
+def test_build_episode_one_arm_with_gripper(bimanual_export, tmp_path):
+    export = load_export(bimanual_export)
+    config = bimanual_config(bimanual_export, tmp_path, arm_components=(LEFT_ARM,), grippers=(LEFT_GRIPPER,))
+    episode = build_episode(export, _sequence(export, BIMANUAL_SEQ), config)
+    assert episode.segments == ((LEFT_ARM, N_JOINTS), (LEFT_GRIPPER, 1))
+    assert episode.states.shape[1] == N_JOINTS + 1
+
+
+def test_build_episode_missing_gripper_skips(bimanual_export, tmp_path):
+    export = load_export(bimanual_export)
+    with pytest.raises(EpisodeSkip, match=RIGHT_GRIPPER):
+        build_episode(export, _sequence(export, NO_GRIPPER_SEQ), bimanual_config(bimanual_export, tmp_path))
+
+
+def test_build_episode_gripper_without_key_fails(bimanual_export, tmp_path):
+    export = load_export(bimanual_export)
+    config = bimanual_config(bimanual_export, tmp_path, gripper_key="width")
+    with pytest.raises(ValueError, match=f"{LEFT_GRIPPER!r}.*no numeric 'width'"):
+        build_episode(export, _sequence(export, BIMANUAL_SEQ), config)
+
+
+def test_build_episode_single_arm_segments(synthetic_export, tmp_path):
+    export = load_export(synthetic_export)
+    episode = build_episode(export, export.sequences[0], make_config(synthetic_export, tmp_path))
+    assert episode.segments == ((ARM, N_JOINTS),)

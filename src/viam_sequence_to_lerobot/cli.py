@@ -28,6 +28,8 @@ dims), and action is the body-frame delta to the next frame's pose as
 [dx,dy,dz] in mm plus an axis-angle rotation in radians (6 dims). Camera
 frames are encoded as MP4 video. The result loads with LeRobotDataset and
 trains with lerobot-train as-is.
+Several --arm values are concatenated in order, each followed by its --grippers
+entry's docommand_output.<key>.
 """
 
 
