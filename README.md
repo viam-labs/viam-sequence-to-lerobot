@@ -67,7 +67,8 @@ Semantics (run `--help` for all flags):
   `observation.state` is `[left-arm joints…, left-gripper, right-arm joints…, right-gripper]`, and
   `action` is the next frame's state. Capture each gripper with `DoCommand` and a fixed
   `docommand_input` whose response holds its position under `--gripper-key` (default
-  `position`); the converter reads `docommand_output.<key>`. Feature names are prefixed by
+  `position`); the converter reads `docommand_output.<key>`. That value should be a percentage
+  of the gripper's travel (0–100), not raw driver units: it is stored unscaled. Feature names are prefixed by
   component (`left-arm.joint_0`, `left-gripper.position`). A gripper reading without that numeric
   key is an error; an episode whose layout (components and joint counts) differs from the first
   is skipped. `--action-arm` and `delta-ee` stay single-arm without grippers. Every frame needs
