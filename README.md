@@ -52,6 +52,13 @@ Semantics (run `--help` for all flags):
   `[drx, dry, drz]`, the body-frame rotation `R_t⁻¹·R_{t+1}` as an axis-angle
   vector in radians. Sequences with no usable `EndPosition` are skipped, and so
   is any frame whose delta would span a gap in the alignment.
+- `--action-space ee`, from the arm's `EndPosition` readings (and, with
+  `--grippers`, one gripper's `DoCommand`). `observation.state` and `action` are
+  both 10 dims with a gripper, 9 without: the 9-dim pose above, then the gripper
+  opening, unscaled 0-100. `action` is the next frame's state. A frame whose next
+  tick was dropped by alignment is skipped, because a deployed chunk plays one
+  action per tick on a fixed step. Pairs with diff-ik's `servo_trajectory`; a
+  client rebuilds the pose with `state_rotation` and `orientation_vector`.
 
   Rotation takes six dims because no three-number encoding is continuous
   everywhere, and this arm holds its tool within 0.03 rad of π — exactly where

@@ -171,3 +171,47 @@ def bimanual_export(tmp_path: Path) -> Path:
     pq.write_table(pa.table(tabular), export_dir / "tabular_data.parquet")
     pq.write_table(pa.table(binary), export_dir / "binary_data.parquet")
     return export_dir
+
+
+EE_SEQ = "66666666-6666-6666-6666-666666666666"
+EE_ARM, EE_GRIPPER = "arm", "gripper"
+EE_TICKS = 12
+EE_GAP_TICK = 5  # no EndPosition reading: alignment drops this tick
+
+
+def ee_pose(tick: int) -> dict:
+    return {"x": 100.0 + tick, "y": -50.0 + 2 * tick, "z": 80.0 - tick,
+            "o_x": 0.0, "o_y": 0.0, "o_z": -1.0, "theta": 170.0 + 3 * tick}
+
+
+@pytest.fixture
+def ee_export(tmp_path: Path) -> Path:
+    """One arm (EndPosition, tool pointing down) and one gripper (DoCommand position = 10 * tick), 12 ticks at
+    10 Hz, one camera; tick 5 has no EndPosition reading."""
+    export_dir = tmp_path / "ee"
+    export_dir.mkdir()
+    sequences = {"sequence_id": [EE_SEQ], "tags": [["cmd:put the red block in the bin"]],
+                 "start_at": [BASE], "end_at": [BASE + timedelta(seconds=2)]}
+    columns = ["sequence_id", "timestamp", "part_id", "component_name", "method_name"]
+    tabular = {k: [] for k in [*columns, "payload"]}
+    binary = {k: [] for k in [*columns, "path"]}
+
+    def add(table, ts, component, method, key, value):
+        for k, v in zip([*columns, key], [EE_SEQ, ts, "part-1", component, method, value]):
+            table[k].append(v)
+
+    for tick in range(EE_TICKS):
+        ts = BASE + timedelta(seconds=0.1 * tick)
+        rel = f"binary_data/{EE_SEQ}/cam/{tick:04d}.jpeg"
+        _write_image(export_dir / rel, tick)
+        add(binary, ts, CAMERA, "GetImages", "path", rel)
+        if tick != EE_GAP_TICK:
+            add(tabular, ts + timedelta(milliseconds=1), EE_ARM, "EndPosition", "payload",
+                json.dumps({"pose": ee_pose(tick)}))
+        add(tabular, ts + timedelta(milliseconds=2), EE_GRIPPER, "DoCommand", "payload",
+            json.dumps({"docommand_output": {"position": 10.0 * tick, "input": 0.0}}))
+
+    pq.write_table(pa.table(sequences), export_dir / "sequences.parquet")
+    pq.write_table(pa.table(tabular), export_dir / "tabular_data.parquet")
+    pq.write_table(pa.table(binary), export_dir / "binary_data.parquet")
+    return export_dir

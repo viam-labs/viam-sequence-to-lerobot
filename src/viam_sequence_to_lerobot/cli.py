@@ -116,7 +116,8 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="+",
         default=[],
         help="gripper components captured with DoCommand, one per --arm in the same order; each "
-        "gripper's position follows its arm's joints (joints action space, next-state actions)",
+        "gripper's position follows its arm's joints (joints action space, next-state actions); "
+        "also works with --action-space ee (one arm)",
     )
     parser.add_argument(
         "--gripper-key",
@@ -125,14 +126,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--action-space",
-        choices=("joints", "delta-ee"),
+        choices=("joints", "delta-ee", "ee"),
         default="joints",
         help="joints: state/action are JointPositions angles (action = next "
         "frame's joints). delta-ee: state is the absolute EndPosition pose as "
         "[x,y,z] plus two rotation-matrix rows (9 dims) and action is the "
         "body-frame delta as [dx,dy,dz] plus an axis-angle rotation (6 dims); "
         "at inference, compose the delta onto the live EndPosition and call "
-        "MoveToPosition (default: %(default)s)",
+        "MoveToPosition. ee: state is the absolute EndPosition pose (9 dims) "
+        "plus the gripper (1) when --grippers is set; action is the next "
+        "frame's state, in the same layout (default: %(default)s)",
     )
     parser.add_argument(
         "--action-arm",

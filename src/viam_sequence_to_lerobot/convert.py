@@ -12,6 +12,11 @@ Mapping (Viam capture -> LeRobot feature):
   arm ``EndPosition`` as ``[x, y, z]`` plus the first two rotation-matrix rows
   (9 dims) -> ``observation.state``; body-frame delta to the next tick's pose,
   translation plus axis-angle (6 dims) -> ``action``
+- ``action_space="ee"``:
+  absolute arm ``EndPosition`` pose (9 dims) plus, with a gripper, its
+  ``docommand_output.<gripper_key>`` (1 dim) -> ``observation.state``; the next
+  tick's state -> ``action``. Frames whose next tick was dropped are skipped,
+  because a deployed chunk plays one action per tick on a fixed step.
 
 Several arms are concatenated in order, each followed by its paired gripper's
 ``docommand_output.<gripper_key>``; ``EpisodeFrames.segments`` records the layout.
@@ -79,9 +84,9 @@ class ConversionConfig:
             raise ValueError("At least one camera component is required")
         if not self.task_prefixes or not all(self.task_prefixes):
             raise ValueError("--task-prefix must be non-empty; an empty prefix matches every tag")
-        if self.action_space not in ("joints", "delta-ee"):
+        if self.action_space not in ("joints", "delta-ee", "ee"):
             raise ValueError(
-                f"action_space must be 'joints' or 'delta-ee', got {self.action_space!r}"
+                f"action_space must be 'joints', 'delta-ee' or 'ee', got {self.action_space!r}"
             )
         if self.action_arm is not None and self.action_space != "joints":
             raise ValueError("action_arm requires action_space='joints'")
@@ -100,6 +105,8 @@ class ConversionConfig:
             raise ValueError("action_arm supports a single arm without grippers")
         if multi and self.action_space == "delta-ee":
             raise ValueError("delta-ee supports a single arm without grippers")
+        if self.action_space == "ee" and len(self.arm_components) > 1:
+            raise ValueError("ee supports a single arm, with at most one gripper")
         names = [*self.camera_components, *self.arm_components, *self.grippers]
         if len(set(names)) != len(names):
             raise ValueError(f"camera, arm and gripper names must be distinct: {names}")
@@ -270,8 +277,9 @@ def build_episode(
         if not rows:
             raise EpisodeSkip(f"no frames from camera {name!r}")
     delta_ee = config.action_space == "delta-ee"
+    pose_mode = config.action_space in ("delta-ee", "ee")
     # Each tabular stream is keyed by its component name, so rate warnings and skips name it.
-    methods = {arm: "EndPosition" if delta_ee else "JointPositions" for arm in config.arm_components}
+    methods = {arm: "EndPosition" if pose_mode else "JointPositions" for arm in config.arm_components}
     methods |= {gripper: "DoCommand" for gripper in config.grippers}
     if config.action_arm is not None:
         methods[config.action_arm] = "JointPositions"
@@ -327,6 +335,31 @@ def build_episode(
         actions = np.stack(
             [state_delta(poses[i], poses[i + 1]) for i in frame_idx]
         ).astype(np.float32)
+    elif config.action_space == "ee":
+        arm = config.arm_components[0]
+        try:
+            poses = np.stack([pose_state(r.payload) for r in aligned[arm]])
+        except (KeyError, ValueError) as exc:
+            raise EpisodeSkip(f"unusable EndPosition reading: {exc}") from exc
+        parts = [poses]
+        segments.append((arm, 9))
+        if config.grippers:
+            gripper = config.grippers[0]
+            parts.append(np.array([[gripper_value(r.payload, config.gripper_key, gripper)]
+                                   for r in aligned[gripper]]))
+            segments.append((gripper, 1))
+        rows = np.concatenate(parts, axis=1)
+        # Absolute targets, but a deployed chunk plays one row per tick: a target across a dropped tick would
+        # be played a tick early, so that frame is dropped (as delta-ee drops its deltas).
+        frame_idx = [i for i in range(len(kept) - 1) if kept[i + 1] == kept[i] + 1]
+        n_spanning = len(kept) - 1 - len(frame_idx)
+        if n_spanning:
+            logger.info("Sequence %s: dropped %d/%d frames whose next tick spans a gap",
+                        sequence.sequence_id, n_spanning, len(kept) - 1)
+        if not frame_idx:
+            raise EpisodeSkip("no two consecutive aligned ticks to form an action")
+        states = rows[frame_idx].astype(np.float32)
+        actions = rows[[i + 1 for i in frame_idx]].astype(np.float32)
     else:
         parts = []
         for i, arm in enumerate(config.arm_components):
@@ -616,6 +649,8 @@ def convert(config: ConversionConfig) -> ConversionSummary:
     segments, state_dim, action_dim = layout
     if config.action_space == "delta-ee":
         state_names, action_names = STATE_NAMES, ACTION_NAMES
+    elif config.action_space == "ee":
+        state_names = action_names = [*STATE_NAMES, *(["gripper"] if config.grippers else [])]
     elif len(segments) == 1:
         state_names = action_names = joint_names(state_dim)
     else:
