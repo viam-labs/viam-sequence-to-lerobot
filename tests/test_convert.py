@@ -21,7 +21,7 @@ from viam_sequence_to_lerobot.convert import (
     sequence_task,
 )
 from viam_sequence_to_lerobot.export_reader import Sequence, load_export
-from viam_sequence_to_lerobot.pose import ACTION_NAMES, STATE_NAMES, state_compose
+from viam_sequence_to_lerobot.pose import ACTION_NAMES, STATE_NAMES, pose_rotation, state_compose
 
 from conftest import (
     BIMANUAL_SEQ,
@@ -35,6 +35,9 @@ from conftest import (
     arm_values,
     ARM,
     CAMERA,
+    EE_ARM,
+    EE_GRIPPER,
+    ee_pose,
     GOOD_SEQ,
     DROPPED_JOINT_TICK,
     GOOD_TICKS,
@@ -772,3 +775,57 @@ def test_convert_single_arm_keeps_plain_joint_names(synthetic_export, tmp_path):
     assert summary.segments == ((ARM, N_JOINTS),)
     features = LeRobotDataset(repo_id=config.repo_id, root=config.output_root).meta.features
     assert features["observation.state"]["names"] == [f"joint_{i}" for i in range(N_JOINTS)]
+
+
+def ee_config(ee_export, tmp_path, **overrides):
+    defaults = dict(export_dir=ee_export, output_root=tmp_path / "ee_out", repo_id="test/ee",
+                    camera_components=(CAMERA,), arm_components=(EE_ARM,), grippers=(EE_GRIPPER,),
+                    action_space="ee", fps=10, min_frames=2)
+    defaults.update(overrides)
+    return ConversionConfig(**defaults)
+
+
+def test_build_episode_ee_layout_and_next_state_actions(ee_export, tmp_path):
+    export = load_export(ee_export)
+    episode = build_episode(export, export.sequences[0], ee_config(ee_export, tmp_path))
+    # 12 ticks: tick 5 dropped (no pose); tick 4's next tick is 6 (a gap), so frame 4 is dropped; tick 11 is
+    # only an action target.
+    kept_ticks = [0, 1, 2, 3, 6, 7, 8, 9, 10]
+    assert episode.states.shape == episode.actions.shape == (len(kept_ticks), 10)
+    assert episode.segments == ((EE_ARM, 9), (EE_GRIPPER, 1))
+    for row, tick in enumerate(kept_ticks):
+        pose = ee_pose(tick)
+        np.testing.assert_allclose(episode.states[row, :3], [pose["x"], pose["y"], pose["z"]], rtol=1e-6)
+        rows = pose_rotation(pose).as_matrix()[:2, :].reshape(6)
+        np.testing.assert_allclose(episode.states[row, 3:9], rows, atol=1e-6)
+        assert episode.states[row, 9] == 10.0 * tick  # gripper passed through unscaled
+        nxt = ee_pose(tick + 1)
+        np.testing.assert_allclose(episode.actions[row, :3], [nxt["x"], nxt["y"], nxt["z"]], rtol=1e-6)
+        np.testing.assert_allclose(episode.actions[row, 3:9], pose_rotation(nxt).as_matrix()[:2, :].reshape(6), atol=1e-6)
+        assert episode.actions[row, 9] == 10.0 * (tick + 1)
+
+
+def test_config_ee_rejects_two_arms_and_action_arm(ee_export, tmp_path):
+    with pytest.raises(ValueError, match="ee supports"):
+        ee_config(ee_export, tmp_path, arm_components=("a", "b"), grippers=())
+    with pytest.raises(ValueError, match="action_arm"):
+        ee_config(ee_export, tmp_path, grippers=(), action_arm="leader")
+
+
+def test_build_episode_ee_without_gripper_is_nine_wide(ee_export, tmp_path):
+    export = load_export(ee_export)
+    episode = build_episode(export, export.sequences[0], ee_config(ee_export, tmp_path, grippers=()))
+    assert episode.states.shape[1] == 9 and episode.segments == ((EE_ARM, 9),)
+
+
+def test_convert_end_to_end_ee(ee_export, tmp_path):
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    config = ee_config(ee_export, tmp_path)
+    summary = convert(config)
+    assert summary.episodes_written == 1 and summary.frames_written == 9
+    dataset = LeRobotDataset(repo_id=config.repo_id, root=config.output_root)
+    names = [*STATE_NAMES, "gripper"]
+    assert dataset.meta.features["observation.state"]["names"] == names
+    assert dataset.meta.features["action"]["names"] == names
+    assert dataset[0]["observation.state"].shape == (10,) and dataset[0]["action"].shape == (10,)
