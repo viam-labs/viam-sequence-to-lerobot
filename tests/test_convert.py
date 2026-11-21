@@ -801,11 +801,12 @@ def test_build_episode_ee_layout_and_next_state_actions(ee_export, tmp_path):
         assert episode.states[row, 9] == 10.0 * tick  # gripper passed through unscaled
         nxt = ee_pose(tick + 1)
         np.testing.assert_allclose(episode.actions[row, :3], [nxt["x"], nxt["y"], nxt["z"]], rtol=1e-6)
+        np.testing.assert_allclose(episode.actions[row, 3:9], pose_rotation(nxt).as_matrix()[:2, :].reshape(6), atol=1e-6)
         assert episode.actions[row, 9] == 10.0 * (tick + 1)
 
 
 def test_config_ee_rejects_two_arms_and_action_arm(ee_export, tmp_path):
-    with pytest.raises(ValueError, match="ee"):
+    with pytest.raises(ValueError, match="ee supports"):
         ee_config(ee_export, tmp_path, arm_components=("a", "b"), grippers=())
     with pytest.raises(ValueError, match="action_arm"):
         ee_config(ee_export, tmp_path, grippers=(), action_arm="leader")

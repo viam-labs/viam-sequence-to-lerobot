@@ -318,8 +318,9 @@ def build_episode(
         # A delta is only honest between adjacent clock ticks. Where alignment
         # dropped ticks, the delta across the gap would report several ticks of
         # motion as one frame's worth, so the frame that would carry it is
-        # dropped rather than mislabelled. Absolute next-state actions do not
-        # need this: a further-away target is still a reachable target.
+        # dropped rather than mislabelled. joints mode keeps gap-spanning
+        # targets (a further-away target is still reachable); ee drops them too,
+        # because a deployed ee chunk plays one row per tick.
         frame_idx = [i for i in range(len(kept) - 1) if kept[i + 1] == kept[i] + 1]
         n_spanning = len(kept) - 1 - len(frame_idx)
         if n_spanning:
