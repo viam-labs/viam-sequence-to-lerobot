@@ -130,9 +130,9 @@ class EpisodeFrames:
     images: dict[str, list[Path]]  # camera component -> one path per frame
     states: np.ndarray  # (n_frames, state_dim) float32
     actions: np.ndarray  # (n_frames, action_dim) float32
+    ticks: list[float]  # clock capture time (epoch s) per frame
     # (component, width) per state/action segment, in vector order; empty in delta-ee mode.
     segments: tuple[tuple[str, int], ...] = ()
-    ticks: list[float] = field(default_factory=list)  # clock capture time (epoch s) per frame
 
     @property
     def n_frames(self) -> int:

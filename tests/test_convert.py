@@ -176,6 +176,22 @@ def test_build_episode_delta_ee_state_is_continuous(synthetic_export, tmp_path):
     assert np.all(state_jumps <= 2 * action_rotations + 1e-5)
 
 
+def test_build_episode_ticks_are_the_kept_clock_timestamps(synthetic_export, tmp_path):
+    export = load_export(synthetic_export)
+    sequence = export.sequences[0]
+    episode = build_episode(
+        export,
+        sequence,
+        make_config(synthetic_export, tmp_path, action_space="delta-ee", camera_components=(CAMERA, WRIST_CAMERA)),
+    )
+    ts_by_path = {r.path: r.timestamp for r in export.binary_rows(sequence.sequence_id, CAMERA)}
+    assert episode.ticks == [ts_by_path[p] for p in episode.images[CAMERA]]
+    # the gap drops frames and delta-ee drops the last tick, so ticks are a strict subset
+    assert len(episode.ticks) == episode.n_frames == GOOD_TICKS - 3
+    assert episode.ticks == sorted(episode.ticks)
+    assert max(ts_by_path.values()) not in episode.ticks
+
+
 def test_build_episode_delta_ee_drops_deltas_spanning_a_gap(synthetic_export, tmp_path):
     # The wrist camera has no frame at DROPPED_WRIST_TICK, so alignment leaves a
     # hole and the delta across it would report two ticks of motion as one
