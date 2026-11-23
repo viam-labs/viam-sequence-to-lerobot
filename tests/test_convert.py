@@ -557,6 +557,36 @@ def test_convert_with_workers_writes_one_ordered_dataset(synthetic_export, tmp_p
     assert not list(config.output_root.parent.glob(".*shard*")), "shard dirs must be cleaned up"
 
 
+def _check_episode_frames(summary, config):
+    import glob
+
+    import pandas as pd
+
+    assert len(summary.episode_frames) == summary.episodes_written
+    assert sum(len(t) for _, _, t in summary.episode_frames) == summary.frames_written
+    for seq_id, tags, ticks in summary.episode_frames:
+        assert isinstance(seq_id, str) and isinstance(tags, tuple)
+        assert ticks == sorted(ticks) and all(isinstance(t, float) for t in ticks)
+    # written order = LeRobot episode order: the lengths match the dataset's episodes
+    eps = pd.concat(pd.read_parquet(p) for p in sorted(glob.glob(str(config.output_root / "meta/episodes/*/*.parquet"))))
+    assert eps.sort_values("episode_index")["length"].tolist() == [len(t) for _, _, t in summary.episode_frames]
+
+
+def test_summary_reports_each_written_frame_tick(synthetic_export, tmp_path):
+    config = make_config(synthetic_export, tmp_path, camera_components=(CAMERA, WRIST_CAMERA))
+    _check_episode_frames(convert(config), config)
+
+
+def test_sharded_summary_reports_ticks_in_episode_order(synthetic_export, tmp_path, monkeypatch):
+    _with_cloned_good_sequence(load_export(synthetic_export), monkeypatch, "close the lid")
+    config = make_config(
+        synthetic_export, tmp_path, camera_components=(CAMERA, WRIST_CAMERA), workers=2, vcodec="libsvtav1"
+    )
+    summary = convert(config)
+    assert [s for s, _, _ in summary.episode_frames][1] == "33333333-3333-3333-3333-333333333333"
+    _check_episode_frames(summary, config)
+
+
 def test_convert_refuses_existing_output_root(synthetic_export, tmp_path):
     """Checked before any encoding: lerobot refuses the directory only at create time,
     which in the sharded path is after every worker has finished."""

@@ -132,6 +132,7 @@ class EpisodeFrames:
     actions: np.ndarray  # (n_frames, action_dim) float32
     # (component, width) per state/action segment, in vector order; empty in delta-ee mode.
     segments: tuple[tuple[str, int], ...] = ()
+    ticks: list[float] = field(default_factory=list)  # clock capture time (epoch s) per frame
 
     @property
     def n_frames(self) -> int:
@@ -146,6 +147,8 @@ class ConversionSummary:
     skipped: list[tuple[str, str]] = field(default_factory=list)  # (sequence_id, reason)
     # The dataset's (component, width) layout in joints mode, set by convert(); empty for delta-ee.
     segments: tuple[tuple[str, int], ...] = ()
+    # (sequence_id, tags, clock tick per written frame), per written episode, in written order.
+    episode_frames: list[tuple[str, tuple[str, ...], list[float]]] = field(default_factory=list)
 
     def skip(self, sequence_id: str, reason: str) -> None:
         logger.warning("Skipping sequence %s: %s", sequence_id, reason)
@@ -156,6 +159,7 @@ class ConversionSummary:
         self.frames_written += other.frames_written
         self.tasks_written |= other.tasks_written
         self.skipped.extend(other.skipped)
+        self.episode_frames.extend(other.episode_frames)
 
 
 # Fraction by which a stream's measured rate may differ from its reference
@@ -398,6 +402,7 @@ def build_episode(
     return EpisodeFrames(
         sequence=sequence, task=task, images=images, states=states, actions=actions,
         segments=tuple(segments),
+        ticks=[clock_rows[kept[i]].timestamp for i in frame_idx],
     )
 
 
@@ -516,6 +521,7 @@ def _write_episodes(
     try:
         for idx, episode in enumerate(episodes):
             n_added = 0
+            added_ticks: list[float] = []
             n_bad_images = 0
             for i in range(episode.n_frames):
                 frame_images = {}
@@ -534,6 +540,7 @@ def _write_episodes(
                         }
                     )
                     n_added += 1
+                    added_ticks.append(episode.ticks[i])
                     continue
                 n_bad_images += 1
             if n_bad_images:
@@ -550,6 +557,9 @@ def _write_episodes(
             _check_encoded_frames(dataset, n_added, config)
             summary.episodes_written += 1
             summary.frames_written += n_added
+            summary.episode_frames.append(
+                (episode.sequence.sequence_id, tuple(episode.sequence.tags), added_ticks)
+            )
             summary.tasks_written.add(episode.task)
             logger.info(
                 "Saved episode %d/%d (%s): %d frames, tags=%s",
