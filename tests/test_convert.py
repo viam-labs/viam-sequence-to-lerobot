@@ -176,6 +176,22 @@ def test_build_episode_delta_ee_state_is_continuous(synthetic_export, tmp_path):
     assert np.all(state_jumps <= 2 * action_rotations + 1e-5)
 
 
+def test_build_episode_ticks_are_the_kept_clock_timestamps(synthetic_export, tmp_path):
+    export = load_export(synthetic_export)
+    sequence = export.sequences[0]
+    episode = build_episode(
+        export,
+        sequence,
+        make_config(synthetic_export, tmp_path, action_space="delta-ee", camera_components=(CAMERA, WRIST_CAMERA)),
+    )
+    ts_by_path = {r.path: r.timestamp for r in export.binary_rows(sequence.sequence_id, CAMERA)}
+    assert episode.ticks == [ts_by_path[p] for p in episode.images[CAMERA]]
+    # the gap drops frames and delta-ee drops the last tick, so ticks are a strict subset
+    assert len(episode.ticks) == episode.n_frames == GOOD_TICKS - 3
+    assert episode.ticks == sorted(episode.ticks)
+    assert max(ts_by_path.values()) not in episode.ticks
+
+
 def test_build_episode_delta_ee_drops_deltas_spanning_a_gap(synthetic_export, tmp_path):
     # The wrist camera has no frame at DROPPED_WRIST_TICK, so alignment leaves a
     # hole and the delta across it would report two ticks of motion as one
@@ -555,6 +571,36 @@ def test_convert_with_workers_writes_one_ordered_dataset(synthetic_export, tmp_p
     assert dataset[n]["task"] == "close the lid"
     assert dataset[n]["observation.images.wrist_cam"].shape[-2:] == (IMAGE_SIZE[1], IMAGE_SIZE[0])
     assert not list(config.output_root.parent.glob(".*shard*")), "shard dirs must be cleaned up"
+
+
+def _check_episode_frames(summary, config):
+    import glob
+
+    import pandas as pd
+
+    assert len(summary.episode_frames) == summary.episodes_written
+    assert sum(len(t) for _, _, t in summary.episode_frames) == summary.frames_written
+    for seq_id, tags, ticks in summary.episode_frames:
+        assert isinstance(seq_id, str) and isinstance(tags, tuple)
+        assert ticks == sorted(ticks) and all(isinstance(t, float) for t in ticks)
+    # written order = LeRobot episode order: the lengths match the dataset's episodes
+    eps = pd.concat(pd.read_parquet(p) for p in sorted(glob.glob(str(config.output_root / "meta/episodes/*/*.parquet"))))
+    assert eps.sort_values("episode_index")["length"].tolist() == [len(t) for _, _, t in summary.episode_frames]
+
+
+def test_summary_reports_each_written_frame_tick(synthetic_export, tmp_path):
+    config = make_config(synthetic_export, tmp_path, camera_components=(CAMERA, WRIST_CAMERA))
+    _check_episode_frames(convert(config), config)
+
+
+def test_sharded_summary_reports_ticks_in_episode_order(synthetic_export, tmp_path, monkeypatch):
+    _with_cloned_good_sequence(load_export(synthetic_export), monkeypatch, "close the lid")
+    config = make_config(
+        synthetic_export, tmp_path, camera_components=(CAMERA, WRIST_CAMERA), workers=2, vcodec="libsvtav1"
+    )
+    summary = convert(config)
+    assert [s for s, _, _ in summary.episode_frames][1] == "33333333-3333-3333-3333-333333333333"
+    _check_episode_frames(summary, config)
 
 
 def test_convert_refuses_existing_output_root(synthetic_export, tmp_path):
